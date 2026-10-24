@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contextsmith"
+version = "0.1.0"
+description = "The best code context per token for coding agents: code graph + hybrid search + git history + memory, packed into a token budget. Local, MCP-ready."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "tree-sitter>=0.25",
+    "tree-sitter-language-pack>=0.9",
+    "typer>=0.15",
+    "rich>=13.9",
+    "mcp>=1.2",
+    "tiktoken>=0.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "ruff>=0.8"]
+
+[project.scripts]
+ctxsmith = "contextsmith.cli:main"
+contextsmith-mcp = "contextsmith.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["contextsmith*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501", "SIM108", "SIM905"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
