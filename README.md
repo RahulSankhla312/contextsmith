@@ -22,22 +22,26 @@ them do:
 |---|---|
 | **Token budgets** — "the best context for this task in N tokens" | ✅ A budgeted packer: full bodies for the top hits, outlines for breadth, never over budget |
 | **A reproducible benchmark on public data** | ✅ `ctxsmith bench` — SWE-bench Lite file localisation, baselines and ablations included |
-| **Git co-change** — files that change together, even with no import between them | ✅ A ranking signal, plus `related` |
+| **Git co-change** — files that change together, even with no import between them | ✅ A ranking signal (removing git costs 8 points of recall@1 on unseen repos), plus `related` |
 | **Commit history search** — "why was this added?" | ✅ Commit messages are indexed per file |
 | **Team notes pinned to code** | ✅ `note add` / MCP `add_note`; notes surface in context |
 | Commercial-friendly licence | ✅ MIT |
 
 ## How it ranks
 
-Seven signals, fused with reciprocal-rank fusion so no single noisy signal dominates:
+Files are ranked by fusing several signals with reciprocal-rank fusion, so no single noisy
+signal dominates:
 
-1. BM25 over whole files
-2. BM25 over symbols (names, signatures, docstrings), with `camelCase`/`snake_case` splitting
-3. BM25 over each file's commit history
-4. Paths mentioned in the task (tracebacks)
-5. Call/import graph neighbours of the best hits
-6. Files that historically change together with the best hits
-7. PageRank over the file graph, as a gentle prior
+1. BM25 over whole files (paths weighted above bodies), with `camelCase`/`snake_case` splitting
+2. Paths named in the task (tracebacks, "in foo/bar.py")
+3. Names the task mentions exactly (`Config.from_file`), weighted by how few files define them
+4. BM25 over each file's commit history
+5. Files that historically change together with the best hits
+
+Call-graph neighbours, PageRank and symbol-level BM25 are available as extra signals, but the
+benchmark showed they favour hub files when ranking *files*, so they are off by default.
+Symbol-level BM25 still decides which functions go into the pack, and the call graph powers
+`callers`, `callees` and `impact`. Weights come from `bench/tune.py`, checked on held-out repos.
 
 Then the packer solves a small knapsack: each candidate (function body, class outline, file
 outline) has a value from the ranking and a cost in tokens; it repeatedly takes the best value
