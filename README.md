@@ -45,9 +45,48 @@ per token, discounting repeated snippets from one file, and trims to the exact b
 
 ## Benchmark
 
-<!-- BENCHMARK -->
+Task: given a real GitHub issue from [SWE-bench Lite](https://www.swebench.com/), find the files
+its real fix changed — checked out at the issue's own commit, so no future code or history leaks in.
 
-Reproduce: `ctxsmith bench --repos pytest-dev/pytest,psf/requests,pallets/flask`.
+**Held-out repositories** (never used for tuning):
+
+SWE-bench Lite file localisation · 37 issues · repos: astropy/astropy, mwaskom/seaborn, pydata/xarray, pylint-dev/pylint, sphinx-doc/sphinx
+
+| strategy | recall@1 | recall@3 | recall@5 | recall@10 | budget_recall@4000 | budget_recall@8000 | query ms |
+|---|---|---|---|---|---|---|---|
+| bm25_files | 43.2% | 56.8% | 70.3% | 81.1% | 29.7% | 37.8% | 27 |
+| contextsmith | 35.1% | 56.8% | 75.7% | 83.8% | 78.4% | 86.5% | 33 |
+| no_git | 27.0% | 51.4% | 67.6% | 89.2% | – | – | 28 |
+| no_mentions | 35.1% | 56.8% | 75.7% | 83.8% | – | – | 30 |
+| with_graph | 35.1% | 56.8% | 73.0% | 83.8% | – | – | 34 |
+
+Median index time per checkout (incremental after the first): 3.24s
+
+**Tuning repositories** (weights chosen here with `bench/tune.py`):
+
+SWE-bench Lite file localisation · 26 issues · repos: pallets/flask, psf/requests, pytest-dev/pytest
+
+| strategy | recall@1 | recall@3 | recall@5 | recall@10 | budget_recall@4000 | budget_recall@8000 | query ms |
+|---|---|---|---|---|---|---|---|
+| bm25_files | 42.3% | 61.5% | 73.1% | 76.9% | 19.2% | 42.3% | 20 |
+| contextsmith | 42.3% | 69.2% | 80.8% | 80.8% | 76.9% | 84.6% | 22 |
+| no_git | 42.3% | 53.8% | 76.9% | 80.8% | – | – | 20 |
+| no_mentions | 30.8% | 61.5% | 73.1% | 80.8% | – | – | 21 |
+| with_graph | 38.5% | 65.4% | 80.8% | 80.8% | – | – | 22 |
+
+Median index time per checkout (incremental after the first): 1.46s
+
+What this shows:
+- **Per token, it is far better.** With the same budget, the files the fix needs are in the
+  agent's context **2.6–4x more often** than pasting whole BM25-ranked files (78% vs 30% at
+  4k tokens on unseen repositories).
+- **Ranking:** better than BM25 at recall@5 and @10 on unseen repositories; **recall@1 is still
+  behind BM25 there** (35% vs 43%) — the next thing to fix (see the roadmap).
+- **Git history earns its place:** removing it costs 8 points of recall@1 on unseen code.
+- Index once in seconds, then each query takes ~30 ms; re-indexing a new commit is incremental.
+
+These are 63 issues — enough to see the direction, not to claim precision. Reproduce:
+`ctxsmith bench --repos sphinx-doc/sphinx,pylint-dev/pylint,pydata/xarray,astropy/astropy,mwaskom/seaborn`.
 
 ## Use it from your agent (MCP)
 
@@ -104,8 +143,9 @@ Python, JavaScript, TypeScript/TSX, Java, Go and Rust — parsed with tree-sitte
 
 ## Status and roadmap
 
-v0.1 — see [PLAN.md](PLAN.md): optional local embeddings, note staleness tracking, file
-watching, multi-repo, a graph UI and a PR impact report are next.
+v0.1 — see [PLAN.md](PLAN.md). Next: close the recall@1 gap (a cross-encoder or embedding
+re-rank of the top 20), note staleness tracking, file watching, multi-repo, a graph UI and a
+PR impact report.
 
 ## Licence
 
