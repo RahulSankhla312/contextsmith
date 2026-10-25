@@ -8,7 +8,6 @@ Hybrid retrieval (code graph + BM25 + local embeddings + git history) packed int
 token budget, served over MCP. Local, no API keys, MIT.
 
 [![CI](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/contextsmith.svg)](https://pypi.org/project/contextsmith/)
 [![Python](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue.svg)](https://github.com/RahulSankhla312/contextsmith/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/RahulSankhla312/contextsmith/blob/main/LICENSE)
 
