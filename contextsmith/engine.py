@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -32,16 +33,53 @@ class Engine:
         self.db_path = Path(db_path)
         self.conn: sqlite3.Connection = store.connect(self.db_path)
         self._lock = threading.Lock()
+        self._last_refresh = 0.0
 
     # ---------------------------------------------------------------- index
 
-    def index(self, with_git: bool = True) -> IndexReport:
+    def index(self, with_git: bool = True, semantic: bool | None = None, progress=None) -> IndexReport:
+        """Index changed files.
+
+        Embeddings are on by default when the `semantic` extra is installed; `semantic=False`
+        turns them off and `semantic=True` insists on them. The choice is remembered.
+        """
+        from contextsmith import semantic as sem
+
         with self._lock:
-            return Indexer(self.root, self.conn).run(with_git=with_git)
+            report = Indexer(self.root, self.conn).run(with_git=with_git)
+            if semantic is None and store.get_meta(self.conn, "semantic") is None:
+                semantic = sem.available()
+            if semantic is not None:
+                store.set_meta(self.conn, "semantic", "on" if semantic else "off")
+                self.conn.commit()
+            if store.get_meta(self.conn, "semantic") == "on":
+                if not sem.available():
+                    raise RuntimeError("Semantic search needs: pip install 'contextsmith[semantic]'")
+                # Skip the vector sync when no file changed and the last sync finished.
+                changed = report.files_parsed or report.files_removed
+                if changed or semantic or store.get_meta(self.conn, "vectors_ok") != "1":
+                    store.set_meta(self.conn, "vectors_ok", "0")
+                    self.conn.commit()
+                    report.embedded = sem.update(self.conn, progress=progress)
+                    store.set_meta(self.conn, "vectors_ok", "1")
+                    self.conn.commit()
+            return report
 
     def ensure_indexed(self) -> None:
         if store.get_meta(self.conn, "indexed_at") is None:
             self.index()
+
+    def refresh(self, min_interval: float = 2.0) -> IndexReport | None:
+        """Re-index changed files, at most every `min_interval` seconds.
+
+        Cheap when nothing changed (one stat per file), so long-running servers can call it
+        before every query and never answer from a stale index.
+        """
+        now = time.monotonic()
+        if now - self._last_refresh < min_interval:
+            return None
+        self._last_refresh = now
+        return self.index()
 
     # ---------------------------------------------------------------- retrieval
 
@@ -148,10 +186,21 @@ class Engine:
             "files": c.execute("SELECT COUNT(*) FROM files").fetchone()[0],
             "symbols": c.execute("SELECT COUNT(*) FROM symbols").fetchone()[0],
             "call_edges": c.execute("SELECT COUNT(*) FROM edges").fetchone()[0],
+            "semantic": self._semantic_status(),
             "languages": langs,
             "central_files": central,
             "most_changed_files": hot,
         }
+
+    def _semantic_status(self) -> dict:
+        from contextsmith import semantic as sem
+
+        on = store.get_meta(self.conn, "semantic") == "on"
+        out: dict = {"enabled": on, "installed": sem.available()}
+        if on and sem.has_vectors(self.conn):
+            out["vectors"] = self.conn.execute("SELECT COUNT(*) FROM symbol_vec").fetchone()[0]
+            out["model"] = sem.DEFAULT_MODEL
+        return out
 
     # ---------------------------------------------------------------- memory
 

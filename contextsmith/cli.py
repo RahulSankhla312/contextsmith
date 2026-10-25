@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sys
+from pathlib import Path
 
 for _stream in (sys.stdout, sys.stderr):
     with contextlib.suppress(AttributeError, OSError):
@@ -24,24 +25,34 @@ PathOpt = typer.Option(".", "--path", "-p", help="Repository to work on.")
 
 
 def _print_json(data) -> None:
-    console.print_json(json.dumps(data))
+    if sys.stdout.isatty():
+        console.print_json(json.dumps(data))
+    else:  # piped into jq, a file or another program: plain JSON, no colour codes
+        sys.stdout.write(json.dumps(data, indent=2) + "\n")
 
 
 @app.command()
 def index(path: str = typer.Argument(".", help="Repository to index."),
-          no_git: bool = typer.Option(False, "--no-git", help="Skip git history.")) -> None:
+          no_git: bool = typer.Option(False, "--no-git", help="Skip git history."),
+          semantic: bool = typer.Option(None, "--semantic/--no-semantic",
+                                        help="Turn local embeddings on or off (remembered).")) -> None:
     """Index a repository (incremental: only changed files are re-parsed)."""
-    report = Engine(path).index(with_git=not no_git)
+    def progress(done: int, total: int) -> None:
+        console.print(f"[dim]embedded {done}/{total} symbols[/]", highlight=False)
+
+    report = Engine(path).index(with_git=not no_git, semantic=semantic, progress=progress)
+    extra = f" · {report.embedded} embedded" if report.embedded else ""
     console.print(f"[green]Indexed[/] {report.files_seen} files "
                   f"({report.files_parsed} parsed, {report.files_removed} removed) · "
-                  f"{report.symbols} symbols · {report.edges} call edges · {report.seconds}s")
+                  f"{report.symbols} symbols · {report.edges} call edges{extra} · {report.seconds}s")
 
 
 @app.command()
 def context(task: str, budget: int = typer.Option(4000, "--budget", "-b", help="Token budget."),
+            rerank: bool = typer.Option(False, "--rerank", help="Re-rank the top files with a cross-encoder."),
             path: str = PathOpt) -> None:
     """Print the best context for a task within a token budget."""
-    pack = Engine(path).context(task, budget=budget)
+    pack = Engine(path).context(task, budget=budget, rerank=rerank)
     sys.stdout.write(pack.text + "\n")
     console.print(f"[dim]{pack.tokens}/{pack.budget} tokens · {pack.units} snippets · "
                   f"{len(pack.files)} files[/]", highlight=False)
@@ -125,16 +136,38 @@ def serve(path: str = PathOpt) -> None:
     run()
 
 
+@app.command("mcp-config")
+def mcp_config(client: str = typer.Argument("claude", help="claude, cursor, windsurf, codex or json."),
+               path: str = PathOpt) -> None:
+    """Print the exact snippet that connects an agent to this repository."""
+    import shutil
+
+    from contextsmith.engine import find_root
+
+    root = str(find_root(Path(path)))
+    exe = shutil.which("ctxsmith") or "ctxsmith"
+    if client == "claude":
+        lines = [f'claude mcp add contextsmith -- "{exe}" serve --path "{root}"']
+    elif client == "codex":  # ~/.codex/config.toml
+        lines = ["[mcp_servers.contextsmith]", f"command = {json.dumps(exe)}",
+                 f'args = ["serve", "--path", {json.dumps(root)}]']
+    else:  # Cursor, Windsurf and most other clients read this JSON shape
+        snippet = {"mcpServers": {"contextsmith": {"command": exe, "args": ["serve", "--path", root]}}}
+        lines = [json.dumps(snippet, indent=2)]
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
 @app.command()
 def bench(
     repos: str = typer.Option("pytest-dev/pytest,psf/requests,pallets/flask", help="SWE-bench Lite repos."),
     limit: int = typer.Option(0, help="Max instances (0 = all for those repos)."),
     out: str = typer.Option("bench/results", help="Output folder."),
+    semantic: bool = typer.Option(True, "--semantic/--no-semantic", help="Include embedding strategies."),
 ) -> None:
     """Run the SWE-bench Lite file-localisation benchmark."""
     from contextsmith.bench import run
 
-    run([r.strip() for r in repos.split(",") if r.strip()], limit=limit, out_dir=out)
+    run([r.strip() for r in repos.split(",") if r.strip()], limit=limit, out_dir=out, semantic=semantic)
 
 
 def main() -> None:

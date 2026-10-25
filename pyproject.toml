@@ -9,6 +9,21 @@ description = "The best code context per token for coding agents: code graph + h
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Rahul Sankhla" }]
+keywords = ["mcp", "code-search", "rag", "context-engineering", "coding-agents", "tree-sitter", "embeddings", "claude-code"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "tree-sitter>=0.25",
     "tree-sitter-language-pack>=0.9",
@@ -19,7 +34,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+semantic = ["fastembed>=0.4", "sqlite-vec>=0.1.6", "numpy>=1.26"]
 dev = ["pytest>=8.3", "ruff>=0.8"]
+
+[project.urls]
+Homepage = "https://github.com/RahulSankhla312/contextsmith"
+Issues = "https://github.com/RahulSankhla312/contextsmith/issues"
+Benchmark = "https://github.com/RahulSankhla312/contextsmith#benchmark"
 
 [project.scripts]
 ctxsmith = "contextsmith.cli:main"

@@ -11,6 +11,7 @@ import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+from contextsmith import semantic
 from contextsmith.text import clean_task, fts_query, mentioned_identifiers, mentioned_paths, query_terms
 
 RRF_K = 60
@@ -27,7 +28,10 @@ DEFAULT_WEIGHTS = {
     "graph": 0.0,
     "cochange": 0.3,
     "pagerank": 0.0,
+    # Used only when the index has embeddings (`ctxsmith index --semantic`).
+    "semantic": 1.0,
 }
+RERANK_TOP = 20
 # A name defined in more files than this (get, run, __init__) identifies nothing.
 MAX_DEFINITIONS = 8
 
@@ -69,6 +73,39 @@ def _bm25(conn: sqlite3.Connection, sql: str, match: str, limit: int) -> list[sq
         return []
 
 
+def _file_of(conn: sqlite3.Connection, ids: list[int]) -> dict[int, int]:
+    out: dict[int, int] = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i : i + 500]
+        out.update((r[0], r[1]) for r in conn.execute(
+            f"SELECT id, file_id FROM symbols WHERE id IN ({','.join('?' * len(chunk))})", chunk))
+    return out
+
+
+def file_card(conn: sqlite3.Connection, path: str, limit: int = 12) -> str:
+    """A short text describing a file for the re-ranker: path plus its main definitions."""
+    rows = conn.execute(
+        "SELECT s.signature, s.doc FROM symbols s JOIN files f ON f.id=s.file_id WHERE f.path=? "
+        "AND s.parent_id IS NULL ORDER BY s.start_line LIMIT ?", (path, limit)).fetchall()
+    parts = [path] + [f"{r['signature']} {r['doc'][:80]}".strip() for r in rows]
+    return "\n".join(parts)[:1500]
+
+
+def _rerank(conn: sqlite3.Connection, task: str, files: list[RankedFile], k: int) -> list[RankedFile]:
+    """Re-order the top files by fusing their fused rank with a cross-encoder's rank."""
+    head, tail = files[:RERANK_TOP], files[RERANK_TOP:]
+    scores = semantic.rerank(task, [file_card(conn, f.path) for f in head])
+    by_ce = sorted(range(len(head)), key=lambda i: -scores[i])
+    ce_rank = {i: r for r, i in enumerate(by_ce)}
+    fused = sorted(range(len(head)), key=lambda i: -(1 / (k + i + 1) + 1 / (k + ce_rank[i] + 1)))
+    out = []
+    for i in fused:
+        f = head[i]
+        f.reasons["rerank"] = ce_rank[i] + 1
+        out.append(f)
+    return out + tail
+
+
 def _mentions(conn: sqlite3.Connection, task: str, paths: dict) -> list[str]:
     names, pairs = mentioned_identifiers(task)
     if not names:
@@ -102,8 +139,11 @@ def rank(
     limit_symbols: int = 60,
     weights: dict[str, float] | None = None,
     test_penalty: float = 0.5,
+    rrf_k: int | None = None,
+    rerank: bool = False,
 ) -> Ranking:
     w = {**DEFAULT_WEIGHTS, **(weights or {})}
+    k = RRF_K if rrf_k is None else rrf_k
     task = clean_task(task)
     terms = query_terms(task)
     match = fts_query(terms)
@@ -137,6 +177,21 @@ def rank(
                 seen.append(p)
         lists["symbol_bm25"] = seen[:200]
 
+    # 2a. Semantic: nearest symbol summaries by embedding (when the index has vectors).
+    sem_rank: dict[int, int] = {}
+    if w.get("semantic") and semantic.has_vectors(conn):
+        hits = semantic.search(conn, task, k=150)
+        sem_rank = {sid: i for i, (sid, _) in enumerate(hits)}
+        file_of = _file_of(conn, [sid for sid, _ in hits])
+        per_file: dict[str, list[float]] = defaultdict(list)
+        for sid, sim in hits:
+            fid = file_of.get(sid)
+            if fid in paths:
+                per_file[paths[fid][0]].append(sim)
+        # A file is as relevant as its best symbol, plus a little for each further strong match.
+        agg = {p: sims[0] + 0.1 * sum(sims[1:3]) for p, sims in per_file.items()}
+        lists["semantic"] = [p for p, _ in sorted(agg.items(), key=lambda kv: -kv[1])]
+
     # 2b. Names the task mentions exactly (Config.from_file, register_hook). A name defined
     #     in one file nearly decides the answer; one defined in many says little.
     if w.get("symbol_mention"):
@@ -161,7 +216,7 @@ def rank(
 
     # Seeds for graph and co-change expansion: the strongest lexical hits so far.
     seed_scores: dict[str, float] = defaultdict(float)
-    for name in ("path_mention", "symbol_mention", "file_bm25", "symbol_bm25"):
+    for name in ("path_mention", "symbol_mention", "file_bm25", "semantic", "symbol_bm25"):
         for i, p in enumerate(lists.get(name, [])[:10]):
             seed_scores[p] += 1.0 / (i + 1)
     seeds = [p for p, _ in sorted(seed_scores.items(), key=lambda kv: -kv[1])[:8]]
@@ -202,19 +257,21 @@ def rank(
     for name, lst in lists.items():
         weight = w.get(name, 0.0)
         for i, p in enumerate(lst):
-            scores[p] += weight / (RRF_K + i + 1)
+            scores[p] += weight / (k + i + 1)
             reasons[p][name] = i + 1
     for p in scores:
         if paths[path_to_id[p]][1]:
             scores[p] *= test_penalty
 
     files = [RankedFile(p, s, reasons[p]) for p, s in sorted(scores.items(), key=lambda kv: -kv[1])]
+    if rerank and files and semantic.available():
+        files = _rerank(conn, task, files, k)
     files = files[:limit_files]
     file_score = {f.path: f.score for f in files}
 
     symbols: list[RankedSymbol] = []
-    if sym_rows:
-        ids = [r["id"] for r in sym_rows]
+    ids = list(dict.fromkeys([r["id"] for r in sym_rows] + list(sem_rank)[:100]))
+    if ids:
         placeholders = ",".join("?" * len(ids))
         rows = conn.execute(
             f"SELECT s.*, f.path FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id IN ({placeholders})",
@@ -223,7 +280,7 @@ def rank(
         top = files[0].score if files else 1.0
         for r in rows:
             fs = file_score.get(r["path"], 0.0) / (top or 1.0)
-            ss = 1.0 / (1 + symbol_rank[r["id"]])
+            ss = max(1.0 / (1 + symbol_rank.get(r["id"], 10_000)), 1.0 / (1 + sem_rank.get(r["id"], 10_000)))
             symbols.append(RankedSymbol(
                 id=r["id"], path=r["path"], name=r["name"], qualname=r["qualname"], kind=r["kind"],
                 start_line=r["start_line"], end_line=r["end_line"], signature=r["signature"],

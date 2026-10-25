@@ -1,0 +1,18 @@
+# Changelog
+
+## 0.1.0 — first release
+
+- **Index:** tree-sitter parsing for Python, JavaScript, TypeScript/TSX, Java, Go and Rust;
+  symbols, call graph, import graph and PageRank in one SQLite file.
+- **Hybrid retrieval:** BM25 over files, symbols and commit history; exact-name and path
+  mentions; git co-change; local embeddings (`contextsmith[semantic]`) stored in sqlite-vec;
+  all fused with reciprocal-rank fusion. Optional cross-encoder re-ranking (`--rerank`).
+- **Token-budgeted packing:** `get_context(task, budget)` returns function bodies, class and
+  file outlines chosen by value per token, never over budget.
+- **Always fresh:** re-indexing checks file size and mtime first, so an unchanged repository
+  re-indexes in milliseconds; the MCP server refreshes before answering.
+- **Memory:** team notes pinned to files and symbols, surfaced in context.
+- **MCP server** with 10 tools; `ctxsmith mcp-config` prints the setup for Claude Code,
+  Cursor, Windsurf and Codex.
+- **Benchmark:** `ctxsmith bench` — SWE-bench Lite file localisation with baselines and
+  ablations; `bench/tune.py` for weight search on a separate tuning set.

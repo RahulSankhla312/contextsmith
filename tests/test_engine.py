@@ -101,3 +101,22 @@ def test_works_without_git(tmp_path: Path):
     eng = Engine(tmp_path)
     report = eng.index()
     assert report.files_seen == 1 and report.edges == 1
+
+
+def test_unchanged_files_are_not_reread(repo: Path, monkeypatch):
+    eng = Engine(repo)
+    eng.index()
+    reads = []
+    original = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda self: reads.append(self.name) or original(self))
+    report = eng.index()
+    assert report.files_parsed == 0 and reads == []  # stat only: no read, no hash, no parse
+
+
+def test_refresh_picks_up_edits_and_is_rate_limited(repo: Path):
+    eng = Engine(repo)
+    eng.index()
+    (repo / "shop/refunds.py").write_text("def refund_order(order_id):\n    pass\n", encoding="utf-8")
+    assert eng.refresh(min_interval=0).files_parsed == 1
+    assert eng.find_symbol("refund_order")
+    assert eng.refresh(min_interval=60) is None  # called again at once: skipped

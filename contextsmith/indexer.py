@@ -31,6 +31,7 @@ class IndexReport:
     files_removed: int = 0
     symbols: int = 0
     edges: int = 0
+    embedded: int = 0
     seconds: float = 0.0
 
     def as_dict(self) -> dict:
@@ -105,7 +106,8 @@ class Indexer:
         conn = self.conn
         paths = list_files(self.root)
         report.files_seen = len(paths)
-        known = {r["path"]: (r["id"], r["sha1"]) for r in conn.execute("SELECT id, path, sha1 FROM files")}
+        known = {r["path"]: (r["id"], r["sha1"], r["mtime_ns"], r["size"])
+                 for r in conn.execute("SELECT id, path, sha1, mtime_ns, size FROM files")}
         current = set(paths)
 
         with conn:
@@ -115,20 +117,37 @@ class Indexer:
             for path in paths:
                 full = self.root / path
                 try:
+                    st = full.stat()
+                except OSError:
+                    continue
+                old = known.get(path)
+                # Fast path: unchanged timestamp and size means unchanged file; no read, no hash.
+                if old and old[2] == st.st_mtime_ns and old[3] == st.st_size:
+                    continue
+                if st.st_size > MAX_FILE_BYTES:
+                    continue
+                try:
                     data = full.read_bytes()
                 except OSError:
                     continue
-                if len(data) > MAX_FILE_BYTES or _looks_generated(data):
+                if _looks_generated(data):
                     continue
                 sha = hashlib.sha1(data).hexdigest()
-                if path in known and known[path][1] == sha:
+                if old and old[1] == sha:  # touched but not changed
+                    conn.execute("UPDATE files SET mtime_ns=?, size=? WHERE id=?",
+                                 (st.st_mtime_ns, st.st_size, old[0]))
                     continue
-                if path in known:
-                    store.delete_file(conn, known[path][0])
-                self._index_file(path, data, sha)
+                if old:
+                    store.delete_file(conn, old[0])
+                self._index_file(path, data, sha, st.st_mtime_ns, st.st_size)
                 report.files_parsed += 1
 
-            report.edges = self._resolve()
+            changed = report.files_parsed or report.files_removed or store.get_meta(conn, "resolved") is None
+            if changed:
+                report.edges = self._resolve()
+            else:
+                report.edges = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+            store.set_meta(conn, "resolved", "1")
             if with_git:
                 self._git()
             store.set_meta(conn, "indexed_at", str(int(time.time())))
@@ -139,7 +158,7 @@ class Indexer:
 
     # ------------------------------------------------------------------ files
 
-    def _index_file(self, path: str, data: bytes, sha: str) -> None:
+    def _index_file(self, path: str, data: bytes, sha: str, mtime_ns: int = 0, size: int = 0) -> None:
         conn = self.conn
         language = language_for(path)
         text = data.decode("utf-8", "replace")
@@ -148,8 +167,8 @@ class Indexer:
         except Exception:  # noqa: BLE001 - one unparsable file must not stop the index
             parsed = None
         cur = conn.execute(
-            "INSERT INTO files(path, language, sha1, lines, is_test) VALUES (?,?,?,?,?)",
-            (path, language, sha, text.count("\n") + 1, int(is_test_path(path))),
+            "INSERT INTO files(path, language, sha1, lines, is_test, mtime_ns, size) VALUES (?,?,?,?,?,?,?)",
+            (path, language, sha, text.count("\n") + 1, int(is_test_path(path)), mtime_ns, size),
         )
         file_id = cur.lastrowid
         conn.execute(

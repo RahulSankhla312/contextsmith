@@ -30,13 +30,16 @@ DATASET_URL = (
 KS = (1, 3, 5, 10)
 BUDGETS = (4000, 8000)
 
-STRATEGIES: dict[str, dict[str, float]] = {
-    "bm25_files": {"symbol_bm25": 0, "symbol_mention": 0, "history": 0, "path_mention": 0, "graph": 0,
-                   "cochange": 0, "pagerank": 0},
+LEXICAL_OFF = {"symbol_bm25": 0, "symbol_mention": 0, "history": 0, "path_mention": 0, "graph": 0,
+               "cochange": 0, "pagerank": 0}
+STRATEGIES: dict[str, dict] = {
+    "bm25_files": {**LEXICAL_OFF, "semantic": 0},
+    # The best lexical-only ranker (v0.1 defaults): what you get without the semantic extra.
+    "lexical": {"semantic": 0, "symbol_mention": 0.3, "cochange": 0.3, "_rrf_k": 60},
+    "semantic_only": {**LEXICAL_OFF, "file_bm25": 0, "semantic": 1.0},
     "contextsmith": {},
+    "contextsmith+rerank": {"_rerank": True},
     "no_git": {"history": 0, "cochange": 0},
-    "no_mentions": {"symbol_mention": 0, "path_mention": 0},
-    "with_graph": {"graph": 0.2, "pagerank": 0.05},
 }
 
 
@@ -93,19 +96,23 @@ def _whole_files_within(root: Path, paths: list[str], budget: int) -> list[str]:
     return out
 
 
-def evaluate(instance: dict) -> dict:
+def evaluate(instance: dict, semantic: bool = True) -> dict:
     root = checkout(instance["repo"], instance["base_commit"])
     eng = Engine(root, db_path=CACHE / "index" / f"{instance['repo'].replace('/', '__')}.db")
     t0 = time.perf_counter()
-    eng.index()
+    eng.index(semantic=semantic)
     index_s = time.perf_counter() - t0
     gold = gold_files(instance["patch"])
     task = instance["problem_statement"]
     result = {"id": instance["instance_id"], "repo": instance["repo"], "gold": gold,
               "index_s": round(index_s, 2), "strategies": {}}
-    for name, weights in STRATEGIES.items():
+    for name, strategy in STRATEGIES.items():
+        weights = {k: v for k, v in strategy.items() if not k.startswith("_")}
+        if not semantic and (name.startswith("semantic") or "rerank" in name):
+            continue
         t0 = time.perf_counter()
-        ranking = rank(eng.conn, task, weights=weights, limit_files=50)
+        opts = {"weights": weights, "rerank": bool(strategy.get("_rerank")), "rrf_k": strategy.get("_rrf_k")}
+        ranking = rank(eng.conn, task, limit_files=50, **opts)
         query_ms = (time.perf_counter() - t0) * 1000
         files = [f.path for f in ranking.files]
         r = {"query_ms": round(query_ms, 1), "top": files[:10]}
@@ -114,8 +121,8 @@ def evaluate(instance: dict) -> dict:
         for b in BUDGETS:
             if name == "bm25_files":
                 inside = _whole_files_within(root, files, b)
-            elif name == "contextsmith":
-                inside = eng.context(task, budget=b).files
+            elif name in ("lexical", "contextsmith"):
+                inside = eng.context(task, budget=b, **opts).files
             else:
                 continue
             r[f"budget_recall@{b}"] = len(set(inside) & set(gold)) / len(gold)
@@ -137,16 +144,19 @@ def summarize(results: list[dict]) -> str:
     for n in names:
         vals = []
         for c in cols:
-            xs = [r["strategies"][n][c] for r in results if c in r["strategies"][n]]
+            xs = [r["strategies"][n][c] for r in results if n in r["strategies"] and c in r["strategies"][n]]
             vals.append(f"{100 * statistics.mean(xs):.1f}%" if xs else "–")
-        ms = statistics.median(r["strategies"][n]["query_ms"] for r in results)
+        times = [r["strategies"][n]["query_ms"] for r in results if n in r["strategies"]]
+        if not times:
+            continue
+        ms = statistics.median(times)
         lines.append(f"| {n} | " + " | ".join(vals) + f" | {ms:.0f} |")
     idx = statistics.median(r["index_s"] for r in results)
     lines += ["", f"Median index time per checkout (incremental after the first): {idx:.2f}s"]
     return "\n".join(lines)
 
 
-def run(repos: list[str], limit: int = 0, out_dir: str = "bench/results") -> list[dict]:
+def run(repos: list[str], limit: int = 0, out_dir: str = "bench/results", semantic: bool = True) -> list[dict]:
     data = [r for r in load_dataset() if r["repo"] in repos]
     if limit:
         data = data[:limit]
@@ -154,7 +164,7 @@ def run(repos: list[str], limit: int = 0, out_dir: str = "bench/results") -> lis
     out.mkdir(parents=True, exist_ok=True)
     results = []
     for i, inst in enumerate(data, 1):
-        res = evaluate(inst)
+        res = evaluate(inst, semantic=semantic)
         results.append(res)
         cs = res["strategies"]["contextsmith"]
         bm = res["strategies"]["bm25_files"]

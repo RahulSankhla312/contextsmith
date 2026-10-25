@@ -94,13 +94,27 @@ CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5(text, path, symbol);
 """
 
 
+SCHEMA_VERSION = "2"
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring an index written by an older version up to date, in place."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(files)")}
+    if "mtime_ns" not in cols:
+        conn.execute("ALTER TABLE files ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE files ADD COLUMN size INTEGER NOT NULL DEFAULT 0")
+    set_meta(conn, "schema_version", SCHEMA_VERSION)
+    conn.commit()
 
 
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:

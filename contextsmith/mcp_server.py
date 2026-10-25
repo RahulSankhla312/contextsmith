@@ -25,8 +25,19 @@ mcp = _Server(
 
 
 @lru_cache(maxsize=1)
-def engine() -> Engine:
+def _engine() -> Engine:
     return Engine(os.environ.get("CTXSMITH_ROOT", "."))
+
+
+def engine(fresh: bool = True) -> Engine:
+    """The repository engine; re-indexes changed files first so answers are never stale."""
+    eng = _engine()
+    if fresh:
+        eng.refresh()
+    return eng
+
+
+engine.cache_clear = _engine.cache_clear  # type: ignore[attr-defined]
 
 
 def _json(data) -> str:
@@ -34,13 +45,15 @@ def _json(data) -> str:
 
 
 @mcp.tool()
-def get_context(task: str, budget_tokens: int = 4000) -> str:
+def get_context(task: str, budget_tokens: int = 4000, rerank: bool = False) -> str:
     """The most relevant code for a task, packed into at most `budget_tokens` tokens.
 
-    Ranks files and symbols by full-text match, call graph, git co-change and history,
-    then fits function bodies and file outlines into the budget.
+    Pass the task in plain words (a bug report, a feature request, a stack trace). Files are
+    ranked by full-text match, meaning (local embeddings), names and paths the task mentions
+    and git history; function bodies and outlines are then fitted into the budget.
+    `rerank=True` re-scores the top files with a cross-encoder: slower, sometimes sharper.
     """
-    pack = engine().context(task, budget=budget_tokens)
+    pack = engine().context(task, budget=budget_tokens, rerank=rerank)
     return pack.text + f"\n\n<!-- {pack.tokens}/{pack.budget} tokens, {pack.units} snippets -->"
 
 
@@ -83,7 +96,7 @@ def related_files(path: str) -> str:
 @mcp.tool()
 def add_note(text: str, path: str = "", symbol: str = "") -> str:
     """Remember a decision, invariant or gotcha, optionally pinned to a file or symbol."""
-    note_id = engine().add_note(text, path or None, symbol or None)
+    note_id = engine(fresh=False).add_note(text, path or None, symbol or None)
     return f"Saved note {note_id}."
 
 
@@ -96,7 +109,7 @@ def overview() -> str:
 @mcp.tool()
 def reindex() -> str:
     """Re-index changed files (incremental and fast)."""
-    return _json(engine().index().as_dict())
+    return _json(engine(fresh=False).index().as_dict())
 
 
 def main() -> None:
