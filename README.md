@@ -222,6 +222,12 @@ agent never reads code it has just edited from a stale index.
 claude mcp add contextsmith -- ctxsmith serve --path /path/to/repo
 ```
 
+**No install, with [uv](https://docs.astral.sh/uv/)** (the server indexes the folder the agent opens):
+
+```bash
+claude mcp add contextsmith -- uvx --from "contextsmith[semantic]" contextsmith
+```
+
 **Cursor, Windsurf and other clients** (`mcp.json`):
 
 ```json
