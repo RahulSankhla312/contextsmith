@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from pathlib import Path
 
@@ -18,7 +19,9 @@ CREATE TABLE IF NOT EXISTS files (
     sha1 TEXT NOT NULL,
     lines INTEGER NOT NULL,
     is_test INTEGER NOT NULL DEFAULT 0,
-    pagerank REAL NOT NULL DEFAULT 0
+    pagerank REAL NOT NULL DEFAULT 0,
+    mtime_ns INTEGER NOT NULL DEFAULT 0,
+    size INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS symbols (
@@ -65,7 +68,7 @@ CREATE TABLE IF NOT EXISTS file_edges (
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS symbol_fts USING fts5(
-    name, qualname, signature, doc, path, tokenize='unicode61'
+    name, qualname, signature, doc, path, body, tokenize='unicode61'
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS file_fts USING fts5(path, body, tokenize='unicode61');
 
@@ -94,7 +97,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5(text, path, symbol);
 """
 
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
+
+# Everything rebuilt from the source tree. Notes, settings and the embedding cache are not.
+DERIVED = ["vec_symbols", "symbol_vec", "symbol_fts", "file_fts", "history_fts", "edges", "file_edges",
+           "raw_calls", "imports", "symbols", "git_files", "cochange", "files"]
+DERIVED_META = ["indexed_at", "git_head", "resolved", "vectors_ok"]
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -102,18 +110,32 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    version = get_meta(conn, "schema_version")
+    has_index = conn.execute("SELECT 1 FROM sqlite_master WHERE name='files'").fetchone()
+    if has_index and version != SCHEMA_VERSION:
+        _reset_derived(conn)
     conn.executescript(SCHEMA)
-    _migrate(conn)
+    set_meta(conn, "schema_version", SCHEMA_VERSION)
+    conn.commit()
     return conn
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
-    """Bring an index written by an older version up to date, in place."""
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(files)")}
-    if "mtime_ns" not in cols:
-        conn.execute("ALTER TABLE files ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0")
-        conn.execute("ALTER TABLE files ADD COLUMN size INTEGER NOT NULL DEFAULT 0")
-    set_meta(conn, "schema_version", SCHEMA_VERSION)
+def _reset_derived(conn: sqlite3.Connection) -> None:
+    """An index from another version: drop what the next index run rebuilds (cheap, and
+    embeddings come back from the cache), keep the team's notes."""
+    try:  # dropping the vector table needs its module loaded
+        import sqlite_vec
+
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+    except Exception:  # noqa: BLE001
+        pass
+    for table in DERIVED:
+        with contextlib.suppress(sqlite3.OperationalError):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+    conn.executemany("DELETE FROM meta WHERE key=?", [(k,) for k in DERIVED_META])
     conn.commit()
 
 

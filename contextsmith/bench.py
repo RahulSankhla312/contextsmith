@@ -6,6 +6,10 @@ in the top k results, and inside a fixed token budget.
 
 The baseline is BM25 over whole files, and its budgeted variant pastes whole files until
 the budget runs out — what "search the repo and paste files" agents do today.
+
+Two budgeted measures: `budget_recall` — is each file the fix changed in the context at all;
+`hunk_recall` — is the code each hunk of the fix changes actually shown (a stricter test of
+whether the agent sees the lines it must edit, not just a file outline).
 """
 
 from __future__ import annotations
@@ -34,8 +38,8 @@ LEXICAL_OFF = {"symbol_bm25": 0, "symbol_mention": 0, "history": 0, "path_mentio
                "cochange": 0, "pagerank": 0}
 STRATEGIES: dict[str, dict] = {
     "bm25_files": {**LEXICAL_OFF, "semantic": 0},
-    # The best lexical-only ranker (v0.1 defaults): what you get without the semantic extra.
-    "lexical": {"semantic": 0, "symbol_mention": 0.3, "cochange": 0.3, "_rrf_k": 60},
+    # What you get without the semantic extra: the same ranker, embeddings off.
+    "lexical": {"semantic": 0},
     "semantic_only": {**LEXICAL_OFF, "file_bm25": 0, "semantic": 1.0},
     "contextsmith": {},
     "contextsmith+rerank": {"_rerank": True},
@@ -62,6 +66,41 @@ def load_dataset() -> list[dict]:
 
 def gold_files(patch: str) -> list[str]:
     return sorted(set(re.findall(r"^diff --git a/(\S+) b/", patch, re.M)))
+
+
+def gold_hunks(patch: str) -> list[tuple[str, set[int]]]:
+    """For each hunk of the fix: its file and the pre-fix line numbers it touches.
+
+    Removed lines count as themselves; a pure insertion counts as the lines around it.
+    """
+    hunks: list[tuple[str, set[int]]] = []
+    path, old, prev = "", 0, ""
+    for line in patch.splitlines():
+        kind, prev = prev, line[:1]
+        if line.startswith("diff --git"):
+            m = re.match(r"diff --git a/(\S+) b/", line)
+            path = m.group(1) if m else ""
+        elif line.startswith("@@"):
+            m = re.match(r"@@ -(\d+)", line)
+            old = int(m.group(1)) if m else 0
+            hunks.append((path, set()))
+        elif not hunks or line.startswith(("---", "+++")):
+            continue
+        elif line.startswith("-"):
+            hunks[-1][1].add(old)
+            old += 1
+        elif line.startswith("+"):
+            if kind not in ("-", "+"):  # an insertion, not the new side of a replacement
+                hunks[-1][1].update((max(old - 1, 1), old))
+        else:
+            old += 1
+    return [h for h in hunks if h[1]]
+
+
+def hunk_recall(hunks: list[tuple[str, set[int]]], spans: list[tuple[str, int, int]]) -> float:
+    shown = sum(any(p == path and any(a <= ln <= b for ln in lines) for p, a, b in spans)
+                for path, lines in hunks)
+    return shown / len(hunks) if hunks else 0.0
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -103,6 +142,7 @@ def evaluate(instance: dict, semantic: bool = True) -> dict:
     eng.index(semantic=semantic)
     index_s = time.perf_counter() - t0
     gold = gold_files(instance["patch"])
+    hunks = gold_hunks(instance["patch"])
     task = instance["problem_statement"]
     result = {"id": instance["instance_id"], "repo": instance["repo"], "gold": gold,
               "index_s": round(index_s, 2), "strategies": {}}
@@ -121,11 +161,14 @@ def evaluate(instance: dict, semantic: bool = True) -> dict:
         for b in BUDGETS:
             if name == "bm25_files":
                 inside = _whole_files_within(root, files, b)
+                spans = [(p, 1, 10**9) for p in inside]  # whole files show every line
             elif name in ("lexical", "contextsmith"):
-                inside = eng.context(task, budget=b, **opts).files
+                pack = eng.context(task, budget=b, **opts)
+                inside, spans = pack.files, pack.spans
             else:
                 continue
             r[f"budget_recall@{b}"] = len(set(inside) & set(gold)) / len(gold)
+            r[f"hunk_recall@{b}"] = hunk_recall(hunks, spans)
         result["strategies"][name] = r
     eng.close()
     return result
@@ -133,7 +176,8 @@ def evaluate(instance: dict, semantic: bool = True) -> dict:
 
 def summarize(results: list[dict]) -> str:
     names = list(STRATEGIES)
-    cols = [f"recall@{k}" for k in KS] + [f"budget_recall@{b}" for b in BUDGETS]
+    cols = ([f"recall@{k}" for k in KS] + [f"budget_recall@{b}" for b in BUDGETS]
+            + [f"hunk_recall@{b}" for b in BUDGETS])
     lines = [
         f"SWE-bench Lite file localisation · {len(results)} issues · "
         f"repos: {', '.join(sorted({r['repo'] for r in results}))}",

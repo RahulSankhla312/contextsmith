@@ -1,7 +1,7 @@
 """Render docs/demo.gif from real ContextSmith runs.
 
 Every command below is executed for real and its actual output is drawn; nothing is
-typed by hand. Usage: python docs/demo/make_demo.py /path/to/a/flask/checkout
+typed by hand. The only edit: long local paths are shortened for display (repo -> ~/flask). Usage: python docs/demo/make_demo.py /path/to/a/flask/checkout
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ SCENES = [
     ("# The best context for the task, packed to a hard token budget", None),
     ('ctxsmith context "Raise an error when a blueprint name contains a dot" -b 1200', 22),
     ("# What could break if this function changes?", None),
-    ("ctxsmith impact url_for", 14),
+    ("ctxsmith impact url_for -n 6", None),
     ("# Plug it into Claude Code (or Cursor, Codex, Windsurf) over MCP", None),
     ("ctxsmith mcp-config claude", None),
 ]
@@ -51,6 +51,8 @@ def run(cmd: str, cwd: Path, max_lines: int | None) -> list[str]:
     out = subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True, encoding="utf-8",
                          errors="replace", env=env)
     text = re.sub(r"\x1b\[[0-9;]*m", "", out.stdout + out.stderr)
+    for long, short in ((str(cwd.resolve()), "~/flask"), (str(Path.home()), "~")):
+        text = text.replace(long, short)
     lines = [ln[:COLS] for ln in text.rstrip().splitlines()]
     lines = [ln for ln in lines if "UserWarning" not in ln and "warnings.warn" not in ln]
     if max_lines and len(lines) > max_lines:
@@ -104,7 +106,7 @@ class Terminal:
         self.frame(1800 + 40 * len(lines))
 
     def save(self) -> None:
-        palette = [f.quantize(colors=48, method=Image.Quantize.MEDIANCUT) for f in self.frames]
+        palette = [f.quantize(colors=64, method=Image.Quantize.MEDIANCUT) for f in self.frames]
         palette[0].save(OUT, save_all=True, append_images=palette[1:], duration=self.durations,
                         loop=0, optimize=True, disposal=1)
 

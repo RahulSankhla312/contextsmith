@@ -18,6 +18,7 @@ from contextsmith.parser import parse
 from contextsmith.text import identifier_tokens, path_tokens
 
 MAX_FILE_BYTES = 1_500_000
+BODY_CHARS = 6000  # of each symbol's body, for snippet search
 SKIP_DIRS = {
     ".git", "node_modules", ".venv", "venv", "env", "dist", "build", "__pycache__",
     ".contextsmith", "target", "vendor", ".mypy_cache", ".pytest_cache", ".tox", ".next",
@@ -179,6 +180,7 @@ class Indexer:
             return
         ids: list[int] = []
         ptoks = path_tokens(path)
+        lines = text.splitlines()
         for sym in parsed.symbols:
             parent = ids[sym.parent] if sym.parent is not None else None
             cur = conn.execute(
@@ -190,9 +192,10 @@ class Indexer:
             sid = cur.lastrowid
             ids.append(sid)
             conn.execute(
-                "INSERT INTO symbol_fts(rowid, name, qualname, signature, doc, path) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO symbol_fts(rowid, name, qualname, signature, doc, path, body) VALUES (?,?,?,?,?,?,?)",
                 (sid, identifier_tokens(sym.name), identifier_tokens(sym.qualname),
-                 identifier_tokens(sym.signature), sym.doc, ptoks),
+                 identifier_tokens(sym.signature), sym.doc, ptoks,
+                 identifier_tokens(" ".join(lines[sym.start_line - 1 : sym.end_line])[:BODY_CHARS])),
             )
         conn.executemany(
             "INSERT INTO raw_calls(file_id, caller_id, callee_name) VALUES (?,?,?)",

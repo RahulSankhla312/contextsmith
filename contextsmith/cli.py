@@ -77,28 +77,51 @@ def rank(task: str, limit: int = typer.Option(15, "--limit", "-n"), path: str = 
     console.print(table)
 
 
+JsonOpt = typer.Option(False, "--json", help="Print JSON instead of a table.")
+
+
+def _print_symbols(rows: list[dict], as_json: bool, title: str = "") -> None:
+    if as_json:
+        _print_json(rows)
+        return
+    depth = any("depth" in r for r in rows)
+    table = Table(*(["depth"] if depth else []), "symbol", "kind", "where", title=title or None)
+    for r in rows:
+        table.add_row(*([str(r["depth"])] if depth else []), r["name"], r["kind"], f"{r['path']}:{r['lines']}")
+    console.print(table if rows else "[dim]nothing found[/]")
+
+
 @app.command()
-def symbol(name: str, path: str = PathOpt) -> None:
+def symbol(name: str, path: str = PathOpt, as_json: bool = JsonOpt) -> None:
     """Where a symbol is defined."""
-    _print_json(Engine(path).find_symbol(name))
+    _print_symbols(Engine(path).find_symbol(name), as_json)
 
 
 @app.command()
-def callers(name: str, path: str = PathOpt) -> None:
+def callers(name: str, path: str = PathOpt, as_json: bool = JsonOpt) -> None:
     """Functions that call NAME."""
-    _print_json(Engine(path).callers(name))
+    _print_symbols(Engine(path).callers(name), as_json)
 
 
 @app.command()
-def callees(name: str, path: str = PathOpt) -> None:
+def callees(name: str, path: str = PathOpt, as_json: bool = JsonOpt) -> None:
     """Functions that NAME calls."""
-    _print_json(Engine(path).callees(name))
+    _print_symbols(Engine(path).callees(name), as_json)
 
 
 @app.command()
-def impact(name: str, depth: int = typer.Option(3, "--depth"), path: str = PathOpt) -> None:
+def impact(name: str, depth: int = typer.Option(3, "--depth"), limit: int = typer.Option(15, "--limit", "-n"),
+           path: str = PathOpt, as_json: bool = JsonOpt) -> None:
     """What could break if NAME changes (transitive callers)."""
-    _print_json(Engine(path).impact(name, depth=depth))
+    result = Engine(path).impact(name, depth=depth)
+    if as_json:
+        _print_json(result)
+        return
+    rows = result["callers"]
+    title = f"{len(rows)} callers in {len(result['files'])} files depend on {name}"
+    _print_symbols(rows[:limit], False, title)
+    if len(rows) > limit:
+        console.print(f"[dim]… and {len(rows) - limit} more (--limit, --json)[/]")
 
 
 @app.command()
@@ -145,9 +168,12 @@ def mcp_config(client: str = typer.Argument("claude", help="claude, cursor, wind
     from contextsmith.engine import find_root
 
     root = str(find_root(Path(path)))
-    exe = shutil.which("ctxsmith") or "ctxsmith"
+    exe = "ctxsmith"
+    if sys.prefix != sys.base_prefix:  # inside a virtualenv the agent won't have on its PATH
+        exe = shutil.which("ctxsmith", path=str(Path(sys.executable).parent)) or exe
     if client == "claude":
-        lines = [f'claude mcp add contextsmith -- "{exe}" serve --path "{root}"']
+        quoted = f'"{exe}"' if " " in exe else exe
+        lines = [f'claude mcp add contextsmith -- {quoted} serve --path "{root}"']
     elif client == "codex":  # ~/.codex/config.toml
         lines = ["[mcp_servers.contextsmith]", f"command = {json.dumps(exe)}",
                  f'args = ["serve", "--path", {json.dumps(root)}]']

@@ -14,24 +14,33 @@ from dataclasses import dataclass, field
 from contextsmith import semantic
 from contextsmith.text import clean_task, fts_query, mentioned_identifiers, mentioned_paths, query_terms
 
-RRF_K = 60
+# A small k lets the top of each list count for more; 8-15 scored the same, 60 clearly worse.
+RRF_K = 15
 
-# Tuned by grid search on 26 SWE-bench Lite issues (bench/tune.py) and checked on
-# held-out repositories. Symbol-level BM25 and PageRank hurt *file* ranking (they favour
-# hub files), so they are off here; symbol BM25 still ranks the snippets inside the pack.
+# Tuned by grid search (bench/tune.py) on 89 SWE-bench Lite issues from 8 repositories, then
+# checked on Django, which tuning never saw. Signals at 0 hurt *file* ranking in that search:
+# symbol BM25, PageRank and graph neighbours favour hub files, and exact-name mentions and
+# co-change added noise once embeddings were in. They stay available as weights, symbol BM25
+# still picks the snippets inside the pack, and co-change powers `related_files`.
 DEFAULT_WEIGHTS = {
     "file_bm25": 1.0,
-    "symbol_bm25": 0.0,
-    "symbol_mention": 0.3,
-    "history": 0.5,
+    "semantic": 1.5,  # only when the index has embeddings (the `semantic` extra)
     "path_mention": 2.0,
+    "history": 0.5,
+    "symbol_mention": 0.0,
+    "cochange": 0.0,
+    "symbol_bm25": 0.0,
     "graph": 0.0,
-    "cochange": 0.3,
     "pagerank": 0.0,
-    # Used only when the index has embeddings (`ctxsmith index --semantic`).
-    "semantic": 1.0,
 }
 RERANK_TOP = 20
+# How snippets (functions, classes) are scored: the file's relevance, scaled by how well the
+# symbol itself matches (its best rank in symbol BM25 or embedding search). Tuned for
+# `hunk_recall` with bench/tune_pack.py.
+SYMBOL_K = 5.0  # a symbol at rank SYMBOL_K gets half the credit of the best match
+SYMBOL_FLOOR = 0.2  # share of a snippet's value that comes from its file alone
+FILE_POWER = 1.0
+LIMIT_SYMBOLS = 60  # snippet candidates handed to the packer
 # A name defined in more files than this (get, run, __init__) identifies nothing.
 MAX_DEFINITIONS = 8
 
@@ -136,7 +145,7 @@ def rank(
     task: str,
     *,
     limit_files: int = 50,
-    limit_symbols: int = 60,
+    limit_symbols: int | None = None,
     weights: dict[str, float] | None = None,
     test_penalty: float = 0.5,
     rrf_k: int | None = None,
@@ -163,7 +172,7 @@ def rank(
     # 2. Symbol BM25: names, signatures and docstrings, weighted above bodies.
     sym_rows = _bm25(
         conn,
-        "SELECT s.id, s.file_id, bm25(symbol_fts, 4.0, 2.0, 2.0, 1.0, 1.0) AS score "
+        "SELECT s.id, s.file_id, bm25(symbol_fts, 4.0, 2.0, 2.0, 1.0, 1.0, 0.5) AS score "
         "FROM symbol_fts JOIN symbols s ON s.id = symbol_fts.rowid "
         "WHERE symbol_fts MATCH ? ORDER BY score LIMIT ?",
         match, 400,
@@ -279,12 +288,13 @@ def rank(
         ).fetchall()
         top = files[0].score if files else 1.0
         for r in rows:
-            fs = file_score.get(r["path"], 0.0) / (top or 1.0)
-            ss = max(1.0 / (1 + symbol_rank.get(r["id"], 10_000)), 1.0 / (1 + sem_rank.get(r["id"], 10_000)))
+            fs = (file_score.get(r["path"], 0.0) / (top or 1.0)) ** FILE_POWER
+            best = min(symbol_rank.get(r["id"], 10_000), sem_rank.get(r["id"], 10_000))
+            ss = SYMBOL_K / (SYMBOL_K + best)
             symbols.append(RankedSymbol(
                 id=r["id"], path=r["path"], name=r["name"], qualname=r["qualname"], kind=r["kind"],
                 start_line=r["start_line"], end_line=r["end_line"], signature=r["signature"],
-                doc=r["doc"], score=0.6 * fs + 0.4 * ss,
+                doc=r["doc"], score=fs * (SYMBOL_FLOOR + (1 - SYMBOL_FLOOR) * ss),
             ))
         symbols.sort(key=lambda s: -s.score)
-    return Ranking(terms=terms, files=files, symbols=symbols[:limit_symbols])
+    return Ranking(terms=terms, files=files, symbols=symbols[:limit_symbols or LIMIT_SYMBOLS])

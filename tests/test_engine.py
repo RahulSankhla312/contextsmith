@@ -120,3 +120,28 @@ def test_refresh_picks_up_edits_and_is_rate_limited(repo: Path):
     assert eng.refresh(min_interval=0).files_parsed == 1
     assert eng.find_symbol("refund_order")
     assert eng.refresh(min_interval=60) is None  # called again at once: skipped
+
+
+def test_snippets_are_found_by_what_their_body_does(repo: Path):
+    eng = Engine(repo)
+    eng.index(semantic=False)
+    # "float" and "rstrip" appear only inside percent_off's body.
+    target = eng.find_symbol("percent_off")[0]
+    line = int(target["lines"].split("-")[1])
+    pack = eng.context("rstrip float conversion", budget=800)
+    assert any(path == "shop/pricing.py" and start <= line <= end for path, start, end in pack.spans)
+
+
+def test_old_indexes_are_rebuilt_and_keep_notes(repo: Path):
+    from contextsmith import store
+
+    eng = Engine(repo)
+    eng.index()
+    eng.add_note("Prices are in paise", path="shop/pricing.py")
+    store.set_meta(eng.conn, "schema_version", "1")
+    eng.conn.commit()
+    eng.close()
+    eng = Engine(repo)
+    assert eng.conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
+    assert eng.index().files_parsed == 6
+    assert eng.notes()[0]["text"] == "Prices are in paise"

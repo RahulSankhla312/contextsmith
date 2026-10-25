@@ -1,98 +1,100 @@
+<div align="center">
+
 # ContextSmith
 
 **The best code context per token for coding agents.**
 
-ContextSmith indexes your repository into a code graph, full-text indexes and git history,
-then answers one question better than anything else: *given this task and a token budget,
-what code should the agent read?* It runs locally, needs no API keys, and plugs into any
-agent over MCP (Claude Code, Cursor, Codex, Windsurf, …).
+Hybrid retrieval (code graph + BM25 + local embeddings + git history) packed into a hard
+token budget, served over MCP. Local, no API keys, MIT.
+
+[![CI](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/contextsmith.svg)](https://pypi.org/project/contextsmith/)
+[![Python](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue.svg)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+<img src="docs/demo.gif" alt="ContextSmith indexing Flask, ranking files for a bug report, packing context into a token budget and printing the Claude Code setup" width="820">
+
+</div>
+
+Coding agents waste most of their context window on the wrong code: they grep, open whole
+files, and run out of room before they reach the function that needs the fix. ContextSmith
+answers one question as well as possible: **given this task and N tokens, what code should
+the agent read?**
 
 ```bash
-pip install contextsmith        # or: pipx install contextsmith
-ctxsmith index .
-ctxsmith context "Coupon discounts are applied twice at checkout" --budget 4000
+pipx install "contextsmith[semantic]"     # or: pip install "contextsmith[semantic]"
+cd your-repo
+ctxsmith index                             # seconds; incremental afterwards
+ctxsmith context "Coupons are applied twice at checkout" --budget 4000
+ctxsmith mcp-config claude                 # prints the one-line Claude Code setup
 ```
 
-## Why another code-context tool?
+## Results
 
-Graphify, codebase-memory-mcp, GitNexus and Serena build excellent code graphs. What none of
-them do:
+<!-- RESULTS -->
 
-| | ContextSmith |
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph Index["ctxsmith index (incremental)"]
+        TS["tree-sitter<br/>7 languages"] --> SYM["symbols · calls · imports"]
+        SYM --> G["call graph<br/>PageRank"]
+        SYM --> FTS["FTS5 BM25<br/>files · symbols · bodies"]
+        SYM --> EMB["ONNX embeddings<br/>symbol summaries"]
+        EMB --> VEC["sqlite-vec<br/>cosine index"]
+        GIT["git log"] --> H["commit-message index<br/>co-change pairs"]
+    end
+    subgraph Query["get_context(task, budget)"]
+        Q["task text"] --> S1["file BM25"] & S2["semantic kNN"] & S3["paths in task"] & S4["history BM25"]
+        S1 & S2 & S3 & S4 --> RRF["reciprocal-rank<br/>fusion"]
+        RRF --> RR["cross-encoder<br/>re-rank (optional)"]
+        RR --> KS["knapsack packer<br/>value per token"]
+        KS --> OUT["≤ N tokens of code"]
+    end
+    Index -. one SQLite file .-> Query
+```
+
+**One SQLite file per repository** holds everything: files, symbols, call and import edges,
+three FTS5 indexes, git statistics, team notes, and the vector index (a `vec0` virtual table
+from [sqlite-vec](https://github.com/asg017/sqlite-vec); a numpy fallback runs where SQLite
+can't load extensions).
+
+**Retrieval (RAG).** Each signal produces its own ranked list of files; reciprocal-rank fusion
+combines them, so no single noisy signal dominates:
+
+| Signal | What it catches |
 |---|---|
-| **Token budgets** — "the best context for this task in N tokens" | ✅ A budgeted packer: full bodies for the top hits, outlines for breadth, never over budget |
-| **A reproducible benchmark on public data** | ✅ `ctxsmith bench` — SWE-bench Lite file localisation, baselines and ablations included |
-| **Git co-change** — files that change together, even with no import between them | ✅ A ranking signal (removing git costs 8 points of recall@1 on unseen repos), plus `related` |
-| **Commit history search** — "why was this added?" | ✅ Commit messages are indexed per file |
-| **Team notes pinned to code** | ✅ `note add` / MCP `add_note`; notes surface in context |
-| Commercial-friendly licence | ✅ MIT |
+| BM25 over whole files (`camelCase`/`snake_case` split, paths weighted up) | exact vocabulary |
+| Semantic kNN over symbol summaries (`BAAI/bge-small-en-v1.5`, ONNX, CPU) | the same idea in different words |
+| Paths named in the task (tracebacks, "in `foo/bar.py`") | explicit pointers |
+| BM25 over each file's commit messages | "this was touched for a similar bug before" |
+| Co-change, call-graph neighbours, PageRank, exact-name mentions | available as weights; off by default because the benchmark showed they hurt *file* ranking |
 
-## How it ranks
+The weights come from a grid search (`bench/tune.py`) on 89 SWE-bench Lite issues from 8
+repositories and were then checked on Django, which tuning never saw.
 
-Files are ranked by fusing several signals with reciprocal-rank fusion, so no single noisy
-signal dominates:
+**What gets embedded, and why.** Not whole files and not raw chunks: one short summary per
+function or class — path, qualified name, signature, first docstring sentence. On a laptop
+CPU this is ~30x cheaper than embedding bodies, and it is what identifies "which function is
+this about". Vectors are cached by content hash, so a function that didn't change is never
+embedded twice — across re-indexes and across git checkouts. Test files are skipped.
 
-1. BM25 over whole files (paths weighted above bodies), with `camelCase`/`snake_case` splitting
-2. Paths named in the task (tracebacks, "in foo/bar.py")
-3. Names the task mentions exactly (`Config.from_file`), weighted by how few files define them
-4. BM25 over each file's commit history
-5. Files that historically change together with the best hits
+**Optional re-rank.** `--rerank` re-scores the top 20 files with a cross-encoder
+(`ms-marco-MiniLM-L-6-v2`) and fuses that with the first-stage order.
 
-Call-graph neighbours, PageRank and symbol-level BM25 are available as extra signals, but the
-benchmark showed they favour hub files when ranking *files*, so they are off by default.
-Symbol-level BM25 still decides which functions go into the pack, and the call graph powers
-`callers`, `callees` and `impact`. Weights come from `bench/tune.py`, checked on held-out repos.
+**Packing.** Candidates are function bodies (matched by name, docstring and body text),
+class outlines and file outlines. A greedy knapsack takes the best value per token,
+discounts repeats from one file, and enforces the budget on the final rendered text, so the
+answer is never over budget.
 
-Then the packer solves a small knapsack: each candidate (function body, class outline, file
-outline) has a value from the ranking and a cost in tokens; it repeatedly takes the best value
-per token, discounting repeated snippets from one file, and trims to the exact budget.
-
-## Benchmark
-
-Task: given a real GitHub issue from [SWE-bench Lite](https://www.swebench.com/), find the files
-its real fix changed — checked out at the issue's own commit, so no future code or history leaks in.
-
-**Held-out repositories** (never used for tuning):
-
-SWE-bench Lite file localisation · 37 issues · repos: astropy/astropy, mwaskom/seaborn, pydata/xarray, pylint-dev/pylint, sphinx-doc/sphinx
-
-| strategy | recall@1 | recall@3 | recall@5 | recall@10 | budget_recall@4000 | budget_recall@8000 | query ms |
-|---|---|---|---|---|---|---|---|
-| bm25_files | 43.2% | 56.8% | 70.3% | 81.1% | 29.7% | 37.8% | 27 |
-| contextsmith | 35.1% | 56.8% | 75.7% | 83.8% | 78.4% | 86.5% | 33 |
-| no_git | 27.0% | 51.4% | 67.6% | 89.2% | – | – | 28 |
-| no_mentions | 35.1% | 56.8% | 75.7% | 83.8% | – | – | 30 |
-| with_graph | 35.1% | 56.8% | 73.0% | 83.8% | – | – | 34 |
-
-Median index time per checkout (incremental after the first): 3.24s
-
-**Tuning repositories** (weights chosen here with `bench/tune.py`):
-
-SWE-bench Lite file localisation · 26 issues · repos: pallets/flask, psf/requests, pytest-dev/pytest
-
-| strategy | recall@1 | recall@3 | recall@5 | recall@10 | budget_recall@4000 | budget_recall@8000 | query ms |
-|---|---|---|---|---|---|---|---|
-| bm25_files | 42.3% | 61.5% | 73.1% | 76.9% | 19.2% | 42.3% | 20 |
-| contextsmith | 42.3% | 69.2% | 80.8% | 80.8% | 76.9% | 84.6% | 22 |
-| no_git | 42.3% | 53.8% | 76.9% | 80.8% | – | – | 20 |
-| no_mentions | 30.8% | 61.5% | 73.1% | 80.8% | – | – | 21 |
-| with_graph | 38.5% | 65.4% | 80.8% | 80.8% | – | – | 22 |
-
-Median index time per checkout (incremental after the first): 1.46s
-
-What this shows:
-- **Per token, it is far better.** With the same budget, the files the fix needs are in the
-  agent's context **2.6–4x more often** than pasting whole BM25-ranked files (78% vs 30% at
-  4k tokens on unseen repositories).
-- **Ranking:** better than BM25 at recall@5 and @10 on unseen repositories; **recall@1 is still
-  behind BM25 there** (35% vs 43%) — the next thing to fix (see the roadmap).
-- **Git history earns its place:** removing it costs 8 points of recall@1 on unseen code.
-- Index once in seconds, then each query takes ~30 ms; re-indexing a new commit is incremental.
-
-These are 63 issues — enough to see the direction, not to claim precision. Reproduce:
-`ctxsmith bench --repos sphinx-doc/sphinx,pylint-dev/pylint,pydata/xarray,astropy/astropy,mwaskom/seaborn`.
+**Always fresh.** Re-indexing compares file size and mtime before reading anything, so an
+unchanged repository re-indexes in milliseconds; the MCP server does this before answering,
+so the agent never reads a stale index.
 
 ## Use it from your agent (MCP)
+
+`ctxsmith mcp-config <client>` prints the exact snippet for your machine.
 
 **Claude Code**
 
@@ -100,7 +102,7 @@ These are 63 issues — enough to see the direction, not to claim precision. Rep
 claude mcp add contextsmith -- ctxsmith serve --path /path/to/repo
 ```
 
-**Cursor / Windsurf / any MCP client** (`mcp.json`):
+**Cursor, Windsurf and other clients** (`mcp.json`):
 
 ```json
 {
@@ -110,24 +112,42 @@ claude mcp add contextsmith -- ctxsmith serve --path /path/to/repo
 }
 ```
 
-Tools: `get_context(task, budget_tokens)`, `search`, `find_symbol`, `callers`, `callees`,
-`impact`, `related_files`, `add_note`, `overview`, `reindex`.
+**Codex** (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.contextsmith]
+command = "ctxsmith"
+args = ["serve", "--path", "/path/to/repo"]
+```
+
+| Tool | Returns |
+|---|---|
+| `get_context(task, budget_tokens, rerank)` | the best code for the task, packed to the budget |
+| `search(query)` | ranked functions and classes |
+| `find_symbol(name)` | where something is defined |
+| `callers(name)` / `callees(name)` | one hop of the call graph |
+| `impact(name)` | everything that transitively calls it: what a change could break |
+| `related_files(path)` | files linked by code, and files that change together in git |
+| `add_note(text, path, symbol)` | a decision or gotcha that later sessions should know |
+| `overview()` | languages, size, central and most-changed files |
+| `reindex()` | force an incremental re-index |
 
 ## CLI
 
 | Command | What it does |
 |---|---|
-| `ctxsmith index [PATH]` | Index (incremental: only changed files are re-parsed) |
-| `ctxsmith context "task" -b 4000` | Best context within a token budget |
+| `ctxsmith index [PATH] [--no-semantic]` | Index; incremental, embeddings on when the extra is installed |
+| `ctxsmith context "task" -b 4000 [--rerank]` | Best context within a token budget |
 | `ctxsmith rank "task"` | Ranked files, with the signals that found each |
-| `ctxsmith search "query"` | Ranked functions/classes |
-| `ctxsmith symbol / callers / callees NAME` | Navigate the call graph |
+| `ctxsmith search "query"` | Ranked functions and classes |
+| `ctxsmith symbol / callers / callees NAME` | Navigate the call graph (`--json` for scripts) |
 | `ctxsmith impact NAME` | What could break if NAME changes |
 | `ctxsmith related FILE` | Files linked by code, and files that change together |
 | `ctxsmith note add "text" --file F` | Remember a decision or gotcha |
-| `ctxsmith overview` | Languages, size, central and most-changed files |
+| `ctxsmith overview` | Languages, size, central and most-changed files, semantic status |
 | `ctxsmith serve` | MCP server over stdio |
-| `ctxsmith bench` | SWE-bench Lite benchmark |
+| `ctxsmith mcp-config [claude\|cursor\|codex]` | Setup snippet for your agent |
+| `ctxsmith bench --repos django/django` | Run the SWE-bench Lite benchmark yourself |
 
 ## Python API
 
@@ -137,19 +157,44 @@ from contextsmith import Engine
 eng = Engine("path/to/repo")
 eng.index()
 pack = eng.context("Fix the race when two users book the last seat", budget=6000)
-print(pack.text, pack.tokens)
+print(pack.text, pack.tokens, pack.files)
 eng.impact("reserve_seat")
 ```
 
+## Configuration
+
+| Variable | Default |
+|---|---|
+| `CTXSMITH_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` (any [fastembed](https://github.com/qdrant/fastembed) text model, e.g. `jinaai/jina-embeddings-v2-base-code`) |
+| `CTXSMITH_RERANK_MODEL` | `Xenova/ms-marco-MiniLM-L-6-v2` |
+| `FASTEMBED_CACHE_PATH` | `~/.cache/contextsmith/models` |
+
+The index lives in `<repo>/.contextsmith/` (git-ignored automatically). Without the
+`semantic` extra everything still works, lexically.
+
 ## Languages
 
-Python, JavaScript, TypeScript/TSX, Java, Go and Rust — parsed with tree-sitter.
+Python, JavaScript, TypeScript/TSX, Java, Go and Rust, parsed with tree-sitter.
 
-## Status and roadmap
+## How it compares
 
-v0.1 — see [PLAN.md](PLAN.md). Next: close the recall@1 gap (a cross-encoder or embedding
-re-rank of the top 20), note staleness tracking, file watching, multi-repo, a graph UI and a
-PR impact report.
+Graphify, codebase-memory-mcp, GitNexus, Serena and Claude Context are good tools; this is
+where ContextSmith differs:
+
+| | ContextSmith |
+|---|---|
+| Answers "the best context for this task **in N tokens**" | ✅ budgeted packer, never over budget |
+| Published, reproducible benchmark with baselines and ablations | ✅ `ctxsmith bench`, held-out repositories |
+| Lexical + semantic + git history, fused | ✅ |
+| Fully local, no API keys, one SQLite file | ✅ |
+| Team notes pinned to code, surfaced in context | ✅ |
+| Commercial-friendly licence | ✅ MIT |
+
+## Roadmap
+
+Multi-repo indexes, note staleness tracking, a file watcher, a graph view, a PR impact
+report, and more languages. Ideas and benchmark-backed pull requests are welcome: see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licence
 

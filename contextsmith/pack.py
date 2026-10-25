@@ -18,6 +18,10 @@ from contextsmith.text import count_tokens
 
 MAX_BODY_LINES = 80
 SAME_FILE_DISCOUNT = 0.7
+# Value per token**COST_EXPONENT: below 1 so a long, relevant function can beat a short,
+# marginal one. MIN_TOKENS stops one-line stubs from winning on size alone.
+COST_EXPONENT = 0.5
+MIN_TOKENS = 0
 FENCE = {
     "python": "python", "javascript": "javascript", "typescript": "typescript", "tsx": "tsx",
     "java": "java", "go": "go", "rust": "rust",
@@ -42,6 +46,8 @@ class Pack:
     budget: int
     files: list[str] = field(default_factory=list)
     units: int = 0
+    # (path, first line, last line) of every code snippet shown in full.
+    spans: list[tuple[str, int, int]] = field(default_factory=list)
 
 
 class _Files:
@@ -129,7 +135,7 @@ def build(conn: sqlite3.Connection, root: Path, ranking: Ranking, budget: int, t
             if u.start and any(c.path == u.path and c.start <= u.start and u.end <= c.end and c.start
                                for c in chosen):
                 continue  # already inside a chosen body
-            ratio = u.value * (SAME_FILE_DISCOUNT ** per_file[u.path]) / (u.tokens ** 0.5)
+            ratio = u.value * (SAME_FILE_DISCOUNT ** per_file[u.path]) / (max(u.tokens, MIN_TOKENS) ** COST_EXPONENT)
             if ratio > best_ratio:
                 best, best_ratio = u, ratio
         if best is None:
@@ -163,4 +169,6 @@ def build(conn: sqlite3.Connection, root: Path, ranking: Ranking, budget: int, t
         chosen.remove(min(chosen, key=lambda u: u.value / u.tokens))
         text, paths = render(chosen)
         tokens = count_tokens(text)
-    return Pack(text=text, tokens=tokens, budget=budget, files=paths, units=len(chosen))
+    spans = [(u.path, u.start, min(u.end, u.start + MAX_BODY_LINES - 1))
+             for u in chosen if u.start and not u.label.endswith("(outline)")]
+    return Pack(text=text, tokens=tokens, budget=budget, files=paths, units=len(chosen), spans=spans)
