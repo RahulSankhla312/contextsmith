@@ -53,7 +53,7 @@ def run(cmd: str, cwd: Path, max_lines: int | None) -> list[str]:
     text = re.sub(r"\x1b\[[0-9;]*m", "", out.stdout + out.stderr)
     for long, short in ((str(cwd.resolve()), "~/flask"), (str(Path.home()), "~")):
         text = text.replace(long, short)
-    lines = [ln[:COLS] for ln in text.rstrip().splitlines()]
+    lines = [ln[i : i + COLS] for ln in text.rstrip().splitlines() for i in range(0, max(len(ln), 1), COLS)]
     lines = [ln for ln in lines if "UserWarning" not in ln and "warnings.warn" not in ln]
     if max_lines and len(lines) > max_lines:
         lines = lines[:max_lines] + ["…"]
