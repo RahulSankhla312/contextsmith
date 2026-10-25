@@ -14,9 +14,10 @@ from contextsmith import pack, rank
 from contextsmith.bench import BUDGETS, CACHE, checkout, gold_hunks, hunk_recall, load_dataset
 from contextsmith.engine import Engine
 
-RANK_GRID = {"SYMBOL_K": [1.0, 5.0, 20.0], "SYMBOL_FLOOR": [0.2, 0.5], "FILE_POWER": [1.0, 2.0],
-             "LIMIT_SYMBOLS": [60, 150]}
-PACK_GRID = {"COST_EXPONENT": [0.3, 0.5, 0.7], "MIN_TOKENS": [0, 100], "SAME_FILE_DISCOUNT": [0.7, 0.9]}
+RANK_GRID = {"SYMBOL_K": [8.0, 20.0, 50.0], "SYMBOL_FLOOR": [0.0, 0.2], "FILE_POWER": [1.0],
+             "LIMIT_SYMBOLS": [150, 300]}
+PACK_GRID = {"COST_EXPONENT": [0.1, 0.2, 0.3], "MIN_TOKENS": [100, 250]}
+PER_REPO = 6  # issues per repository: packing is slower to score than ranking
 
 
 def combos(grid: dict) -> list[dict]:
@@ -29,8 +30,10 @@ def apply(params: dict) -> None:
 
 
 def main(repos: list[str]) -> None:
-    data = [r for r in load_dataset() if r["repo"] in repos]
+    data = [r for repo in repos for r in [x for x in load_dataset() if x["repo"] == repo][:PER_REPO]]
     grid = [(a, b) for a in combos(RANK_GRID) for b in combos(PACK_GRID)]
+    defaults = ({k: getattr(rank, k) for k in RANK_GRID}, {k: getattr(pack, k) for k in PACK_GRID})
+    grid.append(defaults)  # reference: the constants as they are now
     totals = [0.0] * len(grid)
     for inst in data:
         root = checkout(inst["repo"], inst["base_commit"])
@@ -49,6 +52,7 @@ def main(repos: list[str]) -> None:
                 totals[i] += hunk_recall(hunks, built.spans) / len(BUDGETS)
         eng.close()
         print(f"scored {inst['instance_id']}", flush=True)
+    print(f"\ncurrent defaults: {totals[-1] / len(data):.3f}  {grid[-1]}")
     best = sorted(range(len(grid)), key=lambda i: -totals[i])[:10]
     print(f"\nmean hunk recall over budgets {BUDGETS}:")
     for i in best:

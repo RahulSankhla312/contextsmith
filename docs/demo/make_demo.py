@@ -27,7 +27,7 @@ SCENES = [
     ("# Which files matter for this bug report? Each signal says how it found the file.", None),
     ('ctxsmith rank "Raise an error when a blueprint name contains a dot" -n 5', None),
     ("# The best context for the task, packed to a hard token budget", None),
-    ('ctxsmith context "Raise an error when a blueprint name contains a dot" -b 1200', 22),
+    ('ctxsmith context "Raise an error when a blueprint name contains a dot" -b 4000', 24),
     ("# What could break if this function changes?", None),
     ("ctxsmith impact url_for -n 6", None),
     ("# Plug it into Claude Code (or Cursor, Codex, Windsurf) over MCP", None),

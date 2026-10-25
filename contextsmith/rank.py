@@ -37,10 +37,10 @@ RERANK_TOP = 20
 # How snippets (functions, classes) are scored: the file's relevance, scaled by how well the
 # symbol itself matches (its best rank in symbol BM25 or embedding search). Tuned for
 # `hunk_recall` with bench/tune_pack.py.
-SYMBOL_K = 5.0  # a symbol at rank SYMBOL_K gets half the credit of the best match
+SYMBOL_K = 20.0  # a symbol at rank SYMBOL_K gets half the credit of the best match
 SYMBOL_FLOOR = 0.2  # share of a snippet's value that comes from its file alone
 FILE_POWER = 1.0
-LIMIT_SYMBOLS = 60  # snippet candidates handed to the packer
+LIMIT_SYMBOLS = 150  # snippet candidates handed to the packer
 # A name defined in more files than this (get, run, __init__) identifies nothing.
 MAX_DEFINITIONS = 8
 

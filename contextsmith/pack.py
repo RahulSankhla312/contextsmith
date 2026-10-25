@@ -20,8 +20,8 @@ MAX_BODY_LINES = 80
 SAME_FILE_DISCOUNT = 0.7
 # Value per token**COST_EXPONENT: below 1 so a long, relevant function can beat a short,
 # marginal one. MIN_TOKENS stops one-line stubs from winning on size alone.
-COST_EXPONENT = 0.5
-MIN_TOKENS = 0
+COST_EXPONENT = 0.1
+MIN_TOKENS = 250
 FENCE = {
     "python": "python", "javascript": "javascript", "typescript": "typescript", "tsx": "tsx",
     "java": "java", "go": "go", "rust": "rust",
