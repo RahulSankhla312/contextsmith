@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -197,7 +198,15 @@ def bench(
 
 
 def main() -> None:
-    app()
+    try:
+        app()
+    except (BrokenPipeError, OSError) as exc:
+        # The reader went away (`ctxsmith ... | head`); Windows reports it as EINVAL.
+        if isinstance(exc, BrokenPipeError) or exc.errno == 22:
+            with contextlib.suppress(OSError):
+                sys.stdout = open(os.devnull, "w")  # noqa: SIM115 - silence the flush at exit
+            raise SystemExit(0) from None
+        raise
 
 
 if __name__ == "__main__":

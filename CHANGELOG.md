@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `ctxsmith ... | head` exits quietly instead of printing a traceback (Windows).
+
 ## 0.1.0 — first release
 
 - **Index:** tree-sitter parsing for Python, JavaScript, TypeScript/TSX, Java, Go and Rust;

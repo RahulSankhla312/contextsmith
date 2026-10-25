@@ -9,6 +9,7 @@ repository into a code graph, hybrid search and git history, and answers every t
 the code that matters, packed into a token budget you choose.
 
 [![CI](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/contextsmith.svg)](https://pypi.org/project/contextsmith/)
 [![Python](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue.svg)](https://github.com/RahulSankhla312/contextsmith/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/RahulSankhla312/contextsmith/blob/main/LICENSE)
 
