@@ -1,0 +1,31 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.RahulSankhla312/contextsmith",
+  "title": "ContextSmith",
+  "description": "Give your coding agent the right code: graph + hybrid search, packed into a token budget. Local.",
+  "repository": {
+    "url": "https://github.com/RahulSankhla312/contextsmith",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/RahulSankhla312/contextsmith",
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "contextsmith",
+      "version": "0.1.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CTXSMITH_ROOT",
+          "description": "Repository to index and answer from (default: the working directory)",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

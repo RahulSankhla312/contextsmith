@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "contextsmith"
-version = "0.1.0"
+version = "0.1.1"
 description = "Give your coding agent the right code, not more code: a local context engine (code graph, hybrid search, embeddings, git history) that packs the best code for a task into a token budget, over MCP."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -44,6 +44,8 @@ Benchmark = "https://github.com/RahulSankhla312/contextsmith#benchmark"
 
 [project.scripts]
 ctxsmith = "contextsmith.cli:main"
+# `uvx contextsmith` (how MCP clients start PyPI servers) runs the MCP server.
+contextsmith = "contextsmith.mcp_server:main"
 contextsmith-mcp = "contextsmith.mcp_server:main"
 
 [tool.setuptools.packages.find]

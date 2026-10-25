@@ -1,7 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
+- Listed in the official MCP Registry as `io.github.RahulSankhla312/contextsmith`;
+  `uvx contextsmith` starts the MCP server (the way MCP clients launch PyPI servers).
+- Faster change check: one stat per file, git HEAD read without a subprocess.
 - `ctxsmith ... | head` exits quietly instead of printing a traceback (Windows).
 
 ## 0.1.0 — first release

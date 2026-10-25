@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.RahulSankhla312/contextsmith -->
 <div align="center">
 
 # ContextSmith
