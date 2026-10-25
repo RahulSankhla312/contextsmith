@@ -41,7 +41,18 @@ engine.cache_clear = _engine.cache_clear  # type: ignore[attr-defined]
 
 
 def _json(data) -> str:
-    return json.dumps(data, indent=2)
+    return json.dumps(data, indent=1)
+
+
+def _lines(rows: list[dict], limit: int, empty: str = "Nothing found.") -> str:
+    """Symbols as one compact line each: agents pay for every token we return."""
+    if not rows:
+        return empty
+    out = [(f"{r['depth']}  " if "depth" in r else "") + f"{r['path']}:{r['lines']}  {r['name']} ({r['kind']})"
+           for r in rows[:limit]]
+    if len(rows) > limit:
+        out.append(f"... and {len(rows) - limit} more (raise `limit` to see them)")
+    return "\n".join(out)
 
 
 @mcp.tool()
@@ -59,32 +70,38 @@ def get_context(task: str, budget_tokens: int = 4000, rerank: bool = False) -> s
 
 @mcp.tool()
 def search(query: str, limit: int = 20) -> str:
-    """Ranked symbols (functions, classes, methods) matching a query."""
-    return _json(engine().search(query, limit=limit))
+    """Ranked symbols (functions, classes, methods) matching a query, as `path:lines  name (kind)`."""
+    return _lines(engine().search(query, limit=limit), limit)
 
 
 @mcp.tool()
 def find_symbol(name: str) -> str:
-    """Where a function, class or method is defined (by name or qualified name)."""
-    return _json(engine().find_symbol(name))
+    """Where a function, class or method is defined (by name or qualified name), with its signature."""
+    rows = engine().find_symbol(name)
+    return "\n".join(f"{r['path']}:{r['lines']}  {r['signature']}" for r in rows) or "Nothing found."
 
 
 @mcp.tool()
-def callers(name: str) -> str:
+def callers(name: str, limit: int = 50) -> str:
     """Functions that call `name`."""
-    return _json(engine().callers(name))
+    return _lines(engine().callers(name), limit)
 
 
 @mcp.tool()
-def callees(name: str) -> str:
+def callees(name: str, limit: int = 50) -> str:
     """Functions that `name` calls."""
-    return _json(engine().callees(name))
+    return _lines(engine().callees(name), limit)
 
 
 @mcp.tool()
-def impact(name: str, depth: int = 3) -> str:
-    """Everything that transitively calls `name`: what a change to it could break."""
-    return _json(engine().impact(name, depth=depth))
+def impact(name: str, depth: int = 3, limit: int = 40) -> str:
+    """Everything that transitively calls `name`: what a change to it could break.
+
+    One line per caller, `depth  path:lines  name (kind)`, nearest first.
+    """
+    result = engine().impact(name, depth=depth)
+    head = f"{len(result['callers'])} callers in {len(result['files'])} files depend on {name}."
+    return head + "\n" + _lines(result["callers"], limit, empty="")
 
 
 @mcp.tool()

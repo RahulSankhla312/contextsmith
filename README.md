@@ -9,10 +9,10 @@ token budget, served over MCP. Local, no API keys, MIT.
 
 [![CI](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/contextsmith.svg)](https://pypi.org/project/contextsmith/)
-[![Python](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue.svg)](pyproject.toml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue.svg)](https://github.com/RahulSankhla312/contextsmith/blob/main/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/RahulSankhla312/contextsmith/blob/main/LICENSE)
 
-<img src="docs/demo.gif" alt="ContextSmith indexing Flask, ranking files for a bug report, packing context into a token budget and printing the Claude Code setup" width="820">
+<img src="https://raw.githubusercontent.com/RahulSankhla312/contextsmith/main/docs/demo.gif" alt="ContextSmith indexing Flask, ranking files for a bug report, packing context into a token budget and printing the Claude Code setup" width="820">
 
 </div>
 
@@ -194,7 +194,7 @@ where ContextSmith differs:
 
 Multi-repo indexes, note staleness tracking, a file watcher, a graph view, a PR impact
 report, and more languages. Ideas and benchmark-backed pull requests are welcome: see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/RahulSankhla312/contextsmith/blob/main/CONTRIBUTING.md).
 
 ## Licence
 
