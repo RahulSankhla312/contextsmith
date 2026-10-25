@@ -9,3 +9,4 @@ dist/
 .contextsmith/
 bench/results*/results.json
 bench/*.log
+bench/results*/results.jsonl

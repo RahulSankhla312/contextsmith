@@ -103,8 +103,16 @@ def hunk_recall(hunks: list[tuple[str, set[int]]], spans: list[tuple[str, int, i
     return shown / len(hunks) if hunks else 0.0
 
 
-def _git(cwd: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+def _git(cwd: Path, *args: str, attempts: int = 3) -> None:
+    """Run git, retrying: on a long benchmark a transient failure must not end the run."""
+    for i in range(attempts):
+        try:
+            subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+            return
+        except subprocess.CalledProcessError:
+            if i == attempts - 1:
+                raise
+            time.sleep(2 * (i + 1))
 
 
 def checkout(repo: str, commit: str) -> Path:
@@ -206,10 +214,18 @@ def run(repos: list[str], limit: int = 0, out_dir: str = "bench/results", semant
         data = data[:limit]
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    results = []
+    # Every result is appended as it is scored, so an interrupted run resumes where it stopped.
+    log = out / "results.jsonl"
+    lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    results = [json.loads(ln) for ln in lines if ln.strip()]
+    done = {r["id"] for r in results}
     for i, inst in enumerate(data, 1):
+        if inst["instance_id"] in done:
+            continue
         res = evaluate(inst, semantic=semantic)
         results.append(res)
+        with log.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(res) + "\n")
         cs = res["strategies"]["contextsmith"]
         bm = res["strategies"]["bm25_files"]
         print(f"[{i}/{len(data)}] {inst['instance_id']}: contextsmith R@5={cs['recall@5']:.2f} "
