@@ -2,10 +2,11 @@
 
 # ContextSmith
 
-**The best code context per token for coding agents.**
+### Give your coding agent the right code, not more code.
 
-Hybrid retrieval (code graph + BM25 + local embeddings + git history) packed into a hard
-token budget, served over MCP. Local, no API keys, MIT.
+A local context engine for Claude Code, Cursor, Codex and any MCP agent. It indexes your
+repository into a code graph, hybrid search and git history, and answers every task with
+the code that matters, packed into a token budget you choose.
 
 [![CI](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/RahulSankhla312/contextsmith/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue.svg)](https://github.com/RahulSankhla312/contextsmith/blob/main/pyproject.toml)
@@ -15,17 +16,82 @@ token budget, served over MCP. Local, no API keys, MIT.
 
 </div>
 
-Coding agents waste most of their context window on the wrong code: they grep, open whole
-files, and run out of room before they reach the function that needs the fix. ContextSmith
-answers one question as well as possible: **given this task and N tokens, what code should
-the agent read?**
+Coding agents spend their context window on the wrong code. They grep, open whole files,
+and run out of room before they reach the function that needs the fix, and you pay for
+every token they read. ContextSmith answers one question as well as possible: **given this
+task and N tokens, what code should the agent read?**
+
+<table>
+<tr>
+<td align="center"><b>92%</b><br>of real bug fixes had the right file inside a 4,000-token context<br><sub>vs 29% for search + whole files</sub></td>
+<td align="center"><b>1.7x</b><br>more often the exact lines to change are shown<br><sub>48% vs 29%, same budget</sub></td>
+<td align="center"><b>100% local</b><br>no API keys, no cloud,<br>code never leaves the machine</td>
+</tr>
+</table>
+
+<sub>Measured on 114 Django issues from SWE-bench Lite that no tuning step ever saw. <a href="#results">Method and full results</a>.</sub>
+
+## Quickstart (60 seconds)
 
 ```bash
-pipx install "contextsmith[semantic]"     # or: pip install "contextsmith[semantic]"
+pipx install "contextsmith[semantic]"      # or: pip install "contextsmith[semantic]"
 cd your-repo
-ctxsmith index                             # seconds; incremental afterwards
+ctxsmith index                              # once; afterwards only changed files are re-read
 ctxsmith context "Coupons are applied twice at checkout" --budget 4000
-ctxsmith mcp-config claude                 # prints the one-line Claude Code setup
+```
+
+Connect it to your agent (the command prints the exact line for your machine):
+
+```bash
+ctxsmith mcp-config claude    # or: cursor, windsurf, codex
+claude mcp add contextsmith -- ctxsmith serve --path /path/to/your-repo
+```
+
+From then on the agent calls `get_context` itself and gets ranked, budgeted code instead of
+grepping. Without the `[semantic]` extra everything still works, using keyword search only.
+
+## Who it's for
+
+### Developers
+
+- **Faster, better agent sessions on big repos.** The agent starts from the right functions
+  instead of exploring; fewer wrong edits and "I couldn't find it" loops.
+- **Understand unfamiliar code.** `ctxsmith context "where are payment retries handled?"`
+  returns the relevant functions with their file and line numbers.
+- **Change safely.** `ctxsmith impact charge_card` lists everything that calls it,
+  transitively: what a change could break, before you make it.
+- **Remember the gotchas.** `ctxsmith note add "never call without the account lock" --symbol
+  charge_card` pins a note to the code; it shows up in every future context for that code,
+  for you and for the agent.
+
+### Teams and companies
+
+| Need | How ContextSmith covers it |
+|---|---|
+| **Code that must not leave the building** (finance, health, government, enterprise IP) | Runs entirely on the developer's machine. Parsing, search and embeddings are local; the only network use is a one-time download of two small open models, which you can mirror internally for air-gapped machines |
+| **Predictable AI spend** | Every answer has a hard token budget you set, so context cost per task is fixed instead of "whatever the agent opened" |
+| **Works with the agents you already pay for** | Standard MCP server: Claude Code, Cursor, Windsurf, Codex, Copilot agents and in-house agents use the same index |
+| **Onboarding** | New engineers and their agents ask questions in plain language and land on the right code |
+| **Code review and CI** | `ctxsmith context "$PR_TITLE" -b 6000` gives a review bot the code a PR touches and depends on; `ctxsmith impact NAME` shows the blast radius |
+| **Team knowledge** | Decisions and invariants live next to the code as notes, not in someone's head |
+| **No lock-in, no procurement** | MIT licence (commercial use is fine), a single SQLite file per repository, no server to run, no account |
+
+Typical rollout: each developer installs it with `pipx`, runs `ctxsmith index` in the
+repositories they work on, and adds one MCP line to their agent. There is nothing to host.
+See [Using it at a company](#using-it-at-a-company) for CI and offline setups.
+
+### Builders of AI tools
+
+ContextSmith is also a Python library. Use it as the retrieval layer of your own agent,
+review bot or internal assistant:
+
+```python
+from contextsmith import Engine
+
+eng = Engine("path/to/repo")
+eng.index()
+pack = eng.context("Fix the race when two users book the last seat", budget=6000)
+prompt = f"{pack.text}\n\nTask: fix the race when two users book the last seat."
 ```
 
 ## Results
@@ -137,9 +203,10 @@ class outlines and file outlines. A greedy knapsack takes the best value per tok
 discounts repeats from one file, and enforces the budget on the final rendered text, so the
 answer is never over budget.
 
-**Always fresh.** Re-indexing compares file size and mtime before reading anything, so an
-unchanged repository re-indexes in milliseconds; the MCP server does this before answering,
-so the agent never reads a stale index.
+**Always fresh.** Re-indexing compares file size and mtime before reading anything and only
+re-parses and re-embeds what changed; checking an unchanged 2,800-file repository takes about
+half a second. The MCP server does this before answering (at most every 2 seconds), so the
+agent never reads code it has just edited from a stale index.
 
 ## Use it from your agent (MCP)
 
@@ -203,11 +270,16 @@ args = ["serve", "--path", "/path/to/repo"]
 ```python
 from contextsmith import Engine
 
-eng = Engine("path/to/repo")
-eng.index()
+eng = Engine("path/to/repo")       # index stored in path/to/repo/.contextsmith/
+eng.index()                        # incremental; returns counts and timings
 pack = eng.context("Fix the race when two users book the last seat", budget=6000)
-print(pack.text, pack.tokens, pack.files)
-eng.impact("reserve_seat")
+pack.text, pack.tokens, pack.files, pack.spans   # markdown, size, files, line ranges shown
+
+eng.rank("seat double-booked").files  # ranked files, with the signals that found each
+eng.search("seat reservation")     # ranked functions and classes
+eng.impact("reserve_seat")         # transitive callers
+eng.related_files("booking/models.py")
+eng.add_note("Seats are locked per show, not per seat", path="booking/models.py")
 ```
 
 ## Configuration
@@ -220,6 +292,84 @@ eng.impact("reserve_seat")
 
 The index lives in `<repo>/.contextsmith/` (git-ignored automatically). Without the
 `semantic` extra everything still works, lexically.
+
+## Using it at a company
+
+**Per developer (the usual rollout).** `pipx install "contextsmith[semantic]"`, then
+`ctxsmith index` in each repository and one `ctxsmith mcp-config` line per agent. Nothing to
+host, no accounts, no shared service to secure.
+
+**In CI: give a review bot the code a pull request is about.**
+
+```yaml
+# .github/workflows/pr-context.yml
+name: PR context
+on: pull_request
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }            # full history powers the git signals
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/cache@v4               # reuse the index and the model between runs
+        with:
+          path: |
+            .contextsmith
+            ~/.cache/contextsmith/models
+          key: contextsmith-${{ github.base_ref }}
+      - run: pip install "contextsmith[semantic]" && ctxsmith index
+      - run: ctxsmith context "$TITLE" --budget 6000 > pr-context.md
+        env:
+          TITLE: ${{ github.event.pull_request.title }}   # via env, never inline: no injection
+      - uses: actions/upload-artifact@v4
+        with: { name: pr-context, path: pr-context.md }
+```
+
+Feed `pr-context.md` to whichever review model you use, or post `ctxsmith impact <function>`
+output as a comment so reviewers see the blast radius.
+
+**Offline and air-gapped machines.**
+
+```bash
+# on a machine with internet access (same OS and Python version as the target)
+pip download "contextsmith[semantic]" -d wheels
+ctxsmith index                     # downloads the embedding model (65 MB) once
+# copy wheels/ and ~/.cache/contextsmith/models/ across, then on the offline machine:
+pip install --no-index --find-links wheels "contextsmith[semantic]"
+export HF_HUB_OFFLINE=1            # never try the network again
+```
+
+**What is stored, and where.** One SQLite file per repository in `<repo>/.contextsmith/`:
+symbols, search indexes, call graph, git statistics and commit messages, notes, and
+embedding vectors. It is git-ignored automatically and never uploaded anywhere. ContextSmith
+has no telemetry; the only downloads are the open embedding model from Hugging Face on first
+use (none without the `semantic` extra) and, if you run `ctxsmith bench`, the public benchmark.
+
+## FAQ
+
+**Does my code leave my machine?** No. Parsing, search, embeddings and the MCP server all
+run locally. Your agent still sends the context it receives to its own model provider, as it
+would with any file it reads; ContextSmith just makes that context smaller and more relevant.
+
+**How big a repository can it handle?** Measured on Django (2,800 files, 38,000 functions and
+classes) on a laptop CPU: 16 s to build the code graph, search and git index from scratch,
+about 3.5 minutes to embed everything the first time, 0.2 s per query, 0.5 s to check for
+changes, 136 MB on disk. After the first run only changed files are re-parsed and re-embedded.
+
+**Does it replace my agent's own search?** No, it gives it a better starting point. The agent
+can still open any file; it just starts from the right functions instead of grepping.
+
+**Which models does it use?** `BAAI/bge-small-en-v1.5` for embeddings (ONNX, CPU, 65 MB),
+changeable with `CTXSMITH_EMBED_MODEL`. No large language model is involved: ContextSmith
+retrieves, your agent reasons.
+
+**What does it cost?** Nothing. MIT licence, including commercial use.
+
+**Is it production-ready?** It is v0.1: tested on Windows, macOS and Linux with Python
+3.11–3.13, benchmarked in public, and honest about what doesn't work yet (see Results).
+Issues and pull requests are welcome.
 
 ## Languages
 

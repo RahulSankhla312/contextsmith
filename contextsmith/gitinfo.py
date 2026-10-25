@@ -45,6 +45,22 @@ def git(root: Path, *args: str) -> str | None:
 
 
 def head(root: Path) -> str:
+    """The current commit. Read from .git directly when possible: a subprocess costs
+    ~0.2 s on Windows, and the MCP server asks before every answer."""
+    try:
+        gitdir = root / ".git"
+        ref = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
+        if not ref.startswith("ref: "):
+            return ref  # detached HEAD: the commit itself
+        name = ref[5:]
+        loose = gitdir / name
+        if loose.is_file():
+            return loose.read_text(encoding="utf-8").strip()
+        for line in (gitdir / "packed-refs").read_text(encoding="utf-8").splitlines():
+            if line.endswith(" " + name):
+                return line.split(" ", 1)[0]
+    except OSError:  # worktrees and submodules keep .git as a file: ask git
+        pass
     out = git(root, "rev-parse", "HEAD")
     return out.strip() if out else ""
 

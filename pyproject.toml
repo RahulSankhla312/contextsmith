@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "contextsmith"
 version = "0.1.0"
-description = "The best code context per token for coding agents: code graph + hybrid search + git history + memory, packed into a token budget. Local, MCP-ready."
+description = "Give your coding agent the right code, not more code: a local context engine (code graph, hybrid search, embeddings, git history) that packs the best code for a task into a token budget, over MCP."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

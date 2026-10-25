@@ -7,6 +7,7 @@ import math
 import os
 import posixpath
 import sqlite3
+import stat
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -49,12 +50,11 @@ def list_files(root: Path) -> list[str]:
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
             for f in filenames:
                 paths.append(os.path.relpath(os.path.join(dirpath, f), root).replace("\\", "/"))
-    # `git ls-files` still lists tracked files deleted from disk, so check existence.
+    # `git ls-files` still lists tracked files deleted from disk; Indexer.run drops those
+    # when it stats each file (one stat per file, not two).
     return sorted(
         p for p in paths
-        if language_for(p)
-        and not any(part in SKIP_DIRS for part in p.split("/")[:-1])
-        and (root / p).is_file()
+        if language_for(p) and not any(part in SKIP_DIRS for part in p.split("/")[:-1])
     )
 
 
@@ -105,7 +105,15 @@ class Indexer:
         t0 = time.perf_counter()
         report = IndexReport()
         conn = self.conn
-        paths = list_files(self.root)
+        stats: dict[str, os.stat_result] = {}
+        for path in list_files(self.root):
+            try:
+                st = os.stat(self.root / path)
+            except OSError:
+                continue  # listed by git but deleted from disk
+            if stat.S_ISREG(st.st_mode):
+                stats[path] = st
+        paths = list(stats)
         report.files_seen = len(paths)
         known = {r["path"]: (r["id"], r["sha1"], r["mtime_ns"], r["size"])
                  for r in conn.execute("SELECT id, path, sha1, mtime_ns, size FROM files")}
@@ -117,10 +125,7 @@ class Indexer:
                 report.files_removed += 1
             for path in paths:
                 full = self.root / path
-                try:
-                    st = full.stat()
-                except OSError:
-                    continue
+                st = stats[path]
                 old = known.get(path)
                 # Fast path: unchanged timestamp and size means unchanged file; no read, no hash.
                 if old and old[2] == st.st_mtime_ns and old[3] == st.st_size:

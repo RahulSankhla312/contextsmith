@@ -10,8 +10,8 @@
   it lowered recall@1 on the Django benchmark).
 - **Token-budgeted packing:** `get_context(task, budget)` returns function bodies, class and
   file outlines chosen by value per token, never over budget.
-- **Always fresh:** re-indexing checks file size and mtime first, so an unchanged repository
-  re-indexes in milliseconds; the MCP server refreshes before answering.
+- **Always fresh:** re-indexing checks file size and mtime first and re-parses only what
+  changed (an unchanged 2,800-file repository: ~0.5 s); the MCP server refreshes before answering.
 - **Memory:** team notes pinned to files and symbols, surfaced in context.
 - **MCP server** with 10 tools; `ctxsmith mcp-config` prints the setup for Claude Code,
   Cursor, Windsurf and Codex.
