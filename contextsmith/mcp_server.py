@@ -56,15 +56,14 @@ def _lines(rows: list[dict], limit: int, empty: str = "Nothing found.") -> str:
 
 
 @mcp.tool()
-def get_context(task: str, budget_tokens: int = 4000, rerank: bool = False) -> str:
+def get_context(task: str, budget_tokens: int = 4000) -> str:
     """The most relevant code for a task, packed into at most `budget_tokens` tokens.
 
     Pass the task in plain words (a bug report, a feature request, a stack trace). Files are
     ranked by full-text match, meaning (local embeddings), names and paths the task mentions
     and git history; function bodies and outlines are then fitted into the budget.
-    `rerank=True` re-scores the top files with a cross-encoder: slower, sometimes sharper.
     """
-    pack = engine().context(task, budget=budget_tokens, rerank=rerank)
+    pack = engine().context(task, budget=budget_tokens)
     return pack.text + f"\n\n<!-- {pack.tokens}/{pack.budget} tokens, {pack.units} snippets -->"
 
 

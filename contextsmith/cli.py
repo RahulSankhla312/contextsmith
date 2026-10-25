@@ -49,7 +49,7 @@ def index(path: str = typer.Argument(".", help="Repository to index."),
 
 @app.command()
 def context(task: str, budget: int = typer.Option(4000, "--budget", "-b", help="Token budget."),
-            rerank: bool = typer.Option(False, "--rerank", help="Re-rank the top files with a cross-encoder."),
+            rerank: bool = typer.Option(False, "--rerank", help="Experimental: re-rank the top files with a cross-encoder (lowered recall@1 in the benchmark)."),
             path: str = PathOpt) -> None:
     """Print the best context for a task within a token budget."""
     pack = Engine(path).context(task, budget=budget, rerank=rerank)

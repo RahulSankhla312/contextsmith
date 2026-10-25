@@ -31,7 +31,57 @@ ctxsmith mcp-config claude                 # prints the one-line Claude Code set
 
 ## Results
 
-<!-- RESULTS -->
+The test: take a real GitHub issue from [SWE-bench Lite](https://www.swebench.com/), check the
+repository out at the issue's own commit (so no future code or history leaks in), give the
+issue text to the tool, and check whether the code the real fix changed comes back.
+
+**Final test on Django: 114 issues that no tuning step ever saw.**
+
+| | BM25, whole files | **ContextSmith** |
+|---|---|---|
+| The fix's file is ranked 1st / in the top 3 / top 5 | 50.9% / 70.2% / 77.2% | **51.8% / 79.8% / 85.1%** |
+| The fix's file is inside a **4,000-token** context | 28.9% | **92.1%** (3.2x) |
+| The **exact lines the fix changes** are shown in 4,000 tokens | 28.9% | **48.1%** (1.7x) |
+| Query time (median, laptop CPU, 2,800-file repository) | 145 ms | 238 ms |
+
+The baseline pastes BM25-ranked files whole until the budget runs out, which is what
+"search the repo and open files" agents do. ContextSmith spends the same tokens on the
+functions that matter and outlines of the rest, so the right file almost always makes it in.
+
+<details>
+<summary>All strategies and ablations</summary>
+
+| strategy | R@1 | R@3 | R@5 | R@10 | file in 4k | file in 8k | lines in 4k | lines in 8k | ms |
+|---|---|---|---|---|---|---|---|---|---|
+| BM25, whole files | 50.9 | 70.2 | 77.2 | 84.2 | 28.9 | 49.1 | 28.9 | 49.1 | 145 |
+| lexical (no embeddings) | 48.2 | 74.6 | 78.9 | 86.0 | 86.0 | 89.5 | 42.3 | 46.2 | 145 |
+| embeddings only | 48.2 | 69.3 | 78.9 | 86.8 | – | – | – | – | 249 |
+| **ContextSmith (default)** | **51.8** | **79.8** | **85.1** | 88.6 | **92.1** | **96.5** | **48.1** | **50.7** | 238 |
+| + cross-encoder re-rank | 34.2 | 73.7 | 81.6 | 91.2 | – | – | – | – | 1824 |
+| without git history | 56.1 | 78.9 | 84.2 | 90.4 | – | – | – | – | 249 |
+
+Full numbers: [bench/results-django/summary.md](https://github.com/RahulSankhla312/contextsmith/blob/main/bench/results-django/summary.md).
+
+</details>
+
+What the ablations say, including what didn't work:
+- **Embeddings earn their place:** adding them to the lexical ranker lifts top-5 from 79% to
+  85% and exact-line coverage from 42% to 48%.
+- **The cross-encoder re-rank hurts** the top result (52% → 34%) at 8x the latency, so it is
+  off by default and marked experimental. A general web-search re-ranker doesn't understand
+  issue-to-code relevance; a code-trained one is on the roadmap.
+- **Git commit history is mixed:** it helped on the tuning repositories, but on Django
+  removing it *raises* recall@1 by 4 points. It stays on because the default was fixed before
+  the Django run; changing it now would be tuning on the test set.
+- At 8,000 tokens whole files catch up on exact lines (49% vs 51%): every Django fix here
+  touches one file, and at that budget it often fits whole.
+
+**Method.** Weights were chosen by grid search on 89 issues from 8 other repositories
+(pytest, requests, flask, sphinx, pylint, xarray, astropy, seaborn) with
+[`bench/tune.py`](https://github.com/RahulSankhla312/contextsmith/blob/main/bench/tune.py) and
+[`bench/tune_pack.py`](https://github.com/RahulSankhla312/contextsmith/blob/main/bench/tune_pack.py),
+then frozen before Django was run once. Reproduce it with
+`ctxsmith bench --repos django/django` (first run: about two hours on a laptop).
 
 ## How it works
 
@@ -48,8 +98,7 @@ flowchart LR
     subgraph Query["get_context(task, budget)"]
         Q["task text"] --> S1["file BM25"] & S2["semantic kNN"] & S3["paths in task"] & S4["history BM25"]
         S1 & S2 & S3 & S4 --> RRF["reciprocal-rank<br/>fusion"]
-        RRF --> RR["cross-encoder<br/>re-rank (optional)"]
-        RR --> KS["knapsack packer<br/>value per token"]
+        RRF --> KS["knapsack packer<br/>value per token"]
         KS --> OUT["≤ N tokens of code"]
     end
     Index -. one SQLite file .-> Query
@@ -80,8 +129,9 @@ CPU this is ~30x cheaper than embedding bodies, and it is what identifies "which
 this about". Vectors are cached by content hash, so a function that didn't change is never
 embedded twice — across re-indexes and across git checkouts. Test files are skipped.
 
-**Optional re-rank.** `--rerank` re-scores the top 20 files with a cross-encoder
-(`ms-marco-MiniLM-L-6-v2`) and fuses that with the first-stage order.
+**Experimental re-rank.** `ctxsmith context --rerank` re-scores the top 20 files with a
+cross-encoder (`ms-marco-MiniLM-L-6-v2`). It is off by default because the benchmark shows it
+hurts (see Results).
 
 **Packing.** Candidates are function bodies (matched by name, docstring and body text),
 class outlines and file outlines. A greedy knapsack takes the best value per token,
@@ -122,7 +172,7 @@ args = ["serve", "--path", "/path/to/repo"]
 
 | Tool | Returns |
 |---|---|
-| `get_context(task, budget_tokens, rerank)` | the best code for the task, packed to the budget |
+| `get_context(task, budget_tokens)` | the best code for the task, packed to the budget |
 | `search(query)` | ranked functions and classes |
 | `find_symbol(name)` | where something is defined |
 | `callers(name)` / `callees(name)` | one hop of the call graph |
@@ -137,7 +187,7 @@ args = ["serve", "--path", "/path/to/repo"]
 | Command | What it does |
 |---|---|
 | `ctxsmith index [PATH] [--no-semantic]` | Index; incremental, embeddings on when the extra is installed |
-| `ctxsmith context "task" -b 4000 [--rerank]` | Best context within a token budget |
+| `ctxsmith context "task" -b 4000` | Best context within a token budget |
 | `ctxsmith rank "task"` | Ranked files, with the signals that found each |
 | `ctxsmith search "query"` | Ranked functions and classes |
 | `ctxsmith symbol / callers / callees NAME` | Navigate the call graph (`--json` for scripts) |
