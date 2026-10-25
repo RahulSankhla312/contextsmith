@@ -1,5 +1,9 @@
 # 60-second demo: ContextSmith inside Claude Code
 
+A rendered 60-second video already exists: `docs/contextsmith-demo.mp4`, built from real runs by
+`docs/demo/capture.py` and `docs/demo/make_video.py`. This page is the shot list for an
+additional screen recording inside Claude Code itself.
+
 Record on Windows with **Win + Alt + R** (Xbox Game Bar) or OBS; on macOS with
 **Cmd + Shift + 5**. Use a dark terminal, font size 16+, window about 1280×720.
 

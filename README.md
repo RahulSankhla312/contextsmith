@@ -16,6 +16,8 @@ the code that matters, packed into a token budget you choose.
 
 <img src="https://raw.githubusercontent.com/RahulSankhla312/contextsmith/main/docs/demo.gif" alt="ContextSmith indexing Flask, ranking files for a bug report, packing context into a token budget and printing the Claude Code setup" width="820">
 
+<sub>▶ <a href="https://github.com/RahulSankhla312/contextsmith/blob/main/docs/contextsmith-demo.mp4">Watch the 60-second video</a>: indexing, context packing, live MCP calls and the benchmark.</sub>
+
 </div>
 
 Coding agents spend their context window on the wrong code. They grep, open whole files,
